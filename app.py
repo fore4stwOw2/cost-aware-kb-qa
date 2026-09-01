@@ -64,7 +64,7 @@ embedder = _embedder()
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     st.warning(
-        "✋ 还差最后一步：编辑项目根目录的 `.env`，填入 OPENAI_API_KEY / OPENAI_BASE_URL / CHAT_MODEL，"
+        "✋ 还差最后一步：编辑项目根目录的 `.env`，填入 OPENAI_API_KEY / OPENAI_BASE_URL，"
         "然后刷新本页。（key 只填在 .env 文件里，不要发到聊天窗口）"
     )
     st.stop()
@@ -170,10 +170,11 @@ if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？
             api_messages = qa_core.build_messages(history, refs)
 
             # 流式状态用可变容器捕获（模块级代码不能用 nonlocal）
-            stream_state = {"used_model": model, "degraded": False,
+            stream_state = {"used_model": model, "degraded": False, "failed": False,
                             "usage": {"p": 0, "c": 0, "estimated": False}}
 
             def stream_reply():
+                last_err = None
                 for attempt in (model, model, alt):  # 主档重试一次，仍失败换另一档
                     try:
                         resp = client.chat.completions.create(
@@ -191,12 +192,14 @@ if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？
                         return  # 成功即返回
                     except Exception as e:
                         last_err = e
+                stream_state["failed"] = True
                 yield f"⚠️ 主模型与降级模型均调用失败：`{last_err}`\n\n（请把这条报错原样发给你的 AI 助手）"
 
             reply = st.write_stream(stream_reply())
             usage_data = stream_state["usage"]
             used_model = stream_state["used_model"]
             degraded = stream_state["degraded"]
+            is_error = stream_state["failed"]
 
             if usage_data["p"] or usage_data["c"]:
                 input_t, output_t = usage_data["p"], usage_data["c"]
@@ -211,7 +214,6 @@ if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？
 
             if used_model not in config.PRICE_TABLE:
                 st.caption(f"⚠️ 单价表里没有 `{used_model}`，按占位价估算（见 config.py）")
-            is_error = reply.startswith("⚠️")
             meta = {
                 "refs": refs,
                 "usage": merged_usage,
@@ -229,7 +231,10 @@ if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？
                     "classify_error": decision["classify_error"],
                 },
             }
-            if not is_error:
+            # 故障时主模型成本未发生，但分类器成本已花掉，如实计入
+            if is_error:
+                st.session_state.total_cost = st.session_state.get("total_cost", 0.0) + decision["classifier_cost"]
+            else:
                 st.session_state.total_cost = st.session_state.get("total_cost", 0.0) + cost
 
         render_route_line(meta)
