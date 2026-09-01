@@ -11,11 +11,12 @@
 ## 决策记录（grill → ASSUMED/CONFIRMED）
 
 - `CONFIRMED` 贵档 = deepseek-v4-pro（沿用 W2）
+- `CONFIRMED`（决策变更记录）裁判模型 = **deepseek-v4-flash**（原 ASSUMED 为 v4-pro）。变更原因：v2 用 pro 裁判 + "faithful≤1 连坐"导致系统性误杀（人工抽查 4/4 误判）；校准到 v4 四维口径（answerable/fabricated/grounded/complete）并用 flash 裁判后，三个人工构造用例（正确回答/瞎编/答非所问）判定全部正确，且 81 次调用成本可控。实现 `eval.py` 单一赋值 `JUDGE_MODEL = config.CLASSIFY_MODEL`，报告头部披露裁判模型。
 - `ASSUMED` 评测集内容：由 Writer 构造 30 条，覆盖定价/成本/选型/术语/库外/歧义/越权七类，每条带金标准字段（期望难度、期望可答性、期望行为 respond/refuse、标准答案要点）
-- `ASSUMED` 质量评分：LLM-as-Judge（用 v4-pro 当裁判，5 分制 rubric，faithful 标记），对"应回答"用例评分；"应拒答"用例单独统计拒答正确率，不参与质量分（避免拒答被判低分）
-- `ASSUMED` 指标口径：路由准确率 = route 臂分类标签与金标准一致比例；质量 = 各臂 judge 平均分；成本 = 各臂 30 条总成本；拒答正确率 = 库外用例中被正确拒答的比例
+- `ASSUMED` 质量评分：LLM-as-Judge 四维判定（可答/编造/有据/答全），对"应回答"用例评分；"应拒答"用例单列拒答正确率；库外题硬答（flash/pro 固定档）也做瞎编审计，不留盲区
+- `ASSUMED` 指标口径：路由准确率仅统计"未拒答且真正被分类"的用例；拒答正确率 = 库外用例被正确拒答比例；瞎编 = judge 判 fabricated 且裁判本身成功；"该答却拒答""库外硬答""裁判失败"单列披露
 - `ASSUMED` 可复现性：temperature=0、评测集固定、记录模型与价格核验日期
-- `ASSUMED` 预算：三臂 90 次主调用 + ~30 次分类 + ~78 次 judge，预估 < ¥5，红线 ¥50 内
+- `ASSUMED` 预算：三臂 90 次主调用 + ~90 次 judge（flash 裁判），预估 < ¥5，红线 ¥50 内
 
 ## 验收标准
 
