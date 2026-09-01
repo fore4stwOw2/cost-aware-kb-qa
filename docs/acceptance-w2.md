@@ -1,7 +1,7 @@
 # W2 验收报告（ai-native-dev-flow · 三角色执行）
 
 > 流程：需求分级（完整流程）→ Grill（4 问，用户未答按 ASSUMED 推进，贵档经确认）→ 验收标准 AC1-AC6（用户拍板）→ 三角色执行 → 修复闭环 → 复验。
-> 产物：需求简报/验收标准见 `docs/spec-w2.md`；本轮 commit：`c41f536`（Writer 首版）→ `9287fef`（修复）→（最终修复见下）。
+> 产物：需求简报/验收标准见 `docs/spec-w2.md`；实现 commit：`c41f536` → `9287fef` → `f327b4b`（终修，当前 HEAD）。
 
 ## 验收标准与结论（Verifier 复验 · 黑盒）
 
