@@ -77,6 +77,8 @@ def render_route_line(meta: dict) -> None:
     info = meta.get("route_info") or {}
     if not info:
         return
+    if info.get("classify_error"):
+        st.caption(f"⚠️ 分类器异常：{info['classify_error']}")
     if meta.get("refused"):
         st.caption(f"🚫 拒答（{info.get('answerable', '-')}）：{meta.get('refuse_reason', '')}")
         return
@@ -129,15 +131,18 @@ if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？
 
     with st.chat_message("assistant"):
         # 路由决策（分类器在这里调用）
-        decision = qa_core.route_decision(client, embedder, index, prompt, threshold=sim_threshold)
+        decision = qa_core.route_decision(client, embedder, index, prompt,
+                                          threshold=sim_threshold, mode=mode)
         refs = decision["refs"]
         if show_scores:
             st.caption("检索得分：" + "、".join(f"{r['score']:.2f}" for r in refs))
 
         if decision["refuse"]:
-            # 拒答分支
+            # 拒答分支（分类器/阈值判定库外，主模型未调用）
             reply = qa_core.REFUSAL_MSG
             st.markdown(reply)
+            if decision["classifier_cost"] > 0:
+                st.session_state.total_cost = st.session_state.get("total_cost", 0.0) + decision["classifier_cost"]
             meta = {
                 "refs": refs,
                 "usage": decision["classifier_usage"],
@@ -150,6 +155,7 @@ if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？
                     "answerable": decision["answerable"],
                     "reason": decision["reason"],
                     "chosen_model": None,
+                    "classify_error": decision["classify_error"],
                 },
             }
         else:
@@ -205,11 +211,13 @@ if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？
 
             if used_model not in config.PRICE_TABLE:
                 st.caption(f"⚠️ 单价表里没有 `{used_model}`，按占位价估算（见 config.py）")
+            is_error = reply.startswith("⚠️")
             meta = {
                 "refs": refs,
                 "usage": merged_usage,
                 "cost": cost,
                 "refused": False,
+                "status": "error" if is_error else None,
                 "route_info": {
                     "mode": mode,
                     "difficulty": decision["difficulty"],
@@ -218,9 +226,11 @@ if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？
                     "chosen_model": model,
                     "used_model": used_model,
                     "degraded": degraded,
+                    "classify_error": decision["classify_error"],
                 },
             }
-            st.session_state.total_cost = st.session_state.get("total_cost", 0.0) + cost
+            if not is_error:
+                st.session_state.total_cost = st.session_state.get("total_cost", 0.0) + cost
 
         render_route_line(meta)
         render_meta(meta)

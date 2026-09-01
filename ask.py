@@ -21,7 +21,9 @@ import qa_core  # noqa: E402
 def _fmt_route_info(r: dict) -> str:
     info = r["route_info"]
     parts = [f"模式={info['mode']}"]
-    if r["refused"]:
+    if r.get("status") == "error":
+        parts.append("❌ 故障（所有模型调用失败）")
+    elif r["refused"]:
         parts.append(f"拒答({info.get('answerable', '-')})")
         if r.get("refuse_reason"):
             parts.append(f"原因={r['refuse_reason']}")
@@ -32,6 +34,8 @@ def _fmt_route_info(r: dict) -> str:
             parts.append(f"理由={info['reason']}")
         if info.get("degraded"):
             parts.append("⚠️降级运行")
+    if info.get("classify_error"):
+        parts.append(f"分类器异常={info['classify_error']}")
     return " | ".join(parts)
 
 
@@ -64,6 +68,11 @@ def main() -> None:
             if r["usage"]:
                 u = r["usage"]
                 print(f"[路由开销] 入 {u.get('p',0)} / 出 {u.get('c',0)}   [成本] ${r['cost']:.4f}")
+        elif r.get("status") == "error":
+            print("→ [❌ 故障]", r["reply"])
+            if r["usage"]:
+                u = r["usage"]
+                print(f"[已发生路由开销] 入 {u.get('p',0)} / 出 {u.get('c',0)}   [成本] ${r['cost']:.4f}")
         else:
             print("A:", r["reply"])
             u = r["usage"]

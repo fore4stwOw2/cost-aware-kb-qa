@@ -104,50 +104,63 @@ def _parse_classify_json(text: str) -> dict | None:
 
 
 def classify_question(client, question: str, top_score: float) -> dict:
-    """用便宜模型做三维分类。返回 {difficulty, answerable, reason, usage, cost}。"""
-    resp = client.chat.completions.create(
-        model=config.CLASSIFY_MODEL,
-        messages=[
-            {"role": "system", "content": _CLASSIFIER_PROMPT},
-            {"role": "user", "content": f"问题：{question}\n（检索到的最相关片段相似度：{top_score:.2f}）"},
-        ],
-        temperature=0,
-    )
-    usage = {"p": resp.usage.prompt_tokens, "c": resp.usage.completion_tokens, "estimated": False}
-    cost = calc_cost(config.CLASSIFY_MODEL, usage["p"], usage["c"])
-    parsed = _parse_classify_json(resp.choices[0].message.content or "")
-    if not parsed:
-        # 解析失败时保守处理：按 complex + uncertain 送贵档，宁可花小钱不可瞎编
-        parsed = {"difficulty": "complex", "answerable": "uncertain", "reason": "分类结果解析失败，保守送贵档"}
-    return {
-        "difficulty": parsed.get("difficulty", "complex"),
-        "answerable": parsed.get("answerable", "uncertain"),
-        "reason": parsed.get("reason", ""),
-        "usage": usage,
-        "cost": cost,
-    }
+    """用便宜模型做三维分类。返回 {difficulty, answerable, reason, usage, cost, error}。
+    任何异常或词表外标签一律保守处理：按 complex + uncertain 送贵档（宁可花小钱不可瞎编）。"""
+    valid_difficulty = {"simple", "complex"}
+    valid_answerable = {"in_kb", "out_of_kb", "uncertain"}
+    try:
+        resp = client.chat.completions.create(
+            model=config.CLASSIFY_MODEL,
+            messages=[
+                {"role": "system", "content": _CLASSIFIER_PROMPT},
+                {"role": "user", "content": f"问题：{question}\n（检索到的最相关片段相似度：{top_score:.2f}）"},
+            ],
+            temperature=0,
+        )
+        usage = {"p": resp.usage.prompt_tokens, "c": resp.usage.completion_tokens, "estimated": False}
+        cost = calc_cost(config.CLASSIFY_MODEL, usage["p"], usage["c"])
+        parsed = _parse_classify_json(resp.choices[0].message.content or "")
+        if parsed is None:
+            difficulty, answerable, reason = "complex", "uncertain", "分类结果解析失败，保守送贵档"
+        else:
+            difficulty = parsed.get("difficulty", "complex")
+            answerable = parsed.get("answerable", "uncertain")
+            reason = parsed.get("reason", "")
+            if difficulty not in valid_difficulty:  # 词表外标签 → 保守送贵档
+                difficulty = "complex"
+            if answerable not in valid_answerable:
+                answerable = "uncertain"
+        return {"difficulty": difficulty, "answerable": answerable, "reason": reason,
+                "usage": usage, "cost": cost, "error": None}
+    except Exception as e:
+        # 分类器故障是单点：不能让它拖垮整个问答，保守降级为"复杂+不确定"送贵档
+        return {"difficulty": "complex", "answerable": "uncertain",
+                "reason": f"分类器调用失败（{e}），保守送贵档", "usage": None, "cost": 0.0,
+                "error": str(e)}
 
 
 # ---------- 路由决策（W2 核心，app/ask/评测共用） ----------
-def route_decision(client, embedder, index, question: str, threshold: float | None = None) -> dict:
+def route_decision(client, embedder, index, question: str, threshold: float | None = None,
+                   mode: str | None = None) -> dict:
     """
     返回决策字典：
       refs, refuse, refuse_reason, difficulty, answerable, reason,
-      chosen_model, classifier_usage, classifier_cost, top_score
+      chosen_model, classifier_usage, classifier_cost, top_score, classify_error
+    mode: "route"（默认，读 config.ROUTE_MODE）/ "flash" / "pro"。
     固定档（flash/pro）模式不调用分类器，也不做阈值拒答。
     """
-    mode = config.ROUTE_MODE
+    mode = mode or config.ROUTE_MODE
     refs = retrieve(index, embedder, question)
     top_score = refs[0]["score"]
 
     if mode == "flash":
         return {"refs": refs, "refuse": False, "chosen_model": config.CHEAP_MODEL,
                 "difficulty": None, "answerable": None, "reason": "固定便宜档", "classifier_cost": 0.0,
-                "classifier_usage": None, "top_score": top_score}
+                "classifier_usage": None, "top_score": top_score, "classify_error": None}
     if mode == "pro":
         return {"refs": refs, "refuse": False, "chosen_model": config.PREMIUM_MODEL,
                 "difficulty": None, "answerable": None, "reason": "固定贵档", "classifier_cost": 0.0,
-                "classifier_usage": None, "top_score": top_score}
+                "classifier_usage": None, "top_score": top_score, "classify_error": None}
 
     # route 模式
     threshold = config.SIM_THRESHOLD if threshold is None else threshold
@@ -156,14 +169,16 @@ def route_decision(client, embedder, index, question: str, threshold: float | No
         return {"refs": refs, "refuse": True,
                 "refuse_reason": f"检索相似度 {top_score:.2f} 低于兜底阈值 {threshold}",
                 "difficulty": None, "answerable": "out_of_kb", "reason": "", "chosen_model": None,
-                "classifier_cost": 0.0, "classifier_usage": None, "top_score": top_score}
+                "classifier_cost": 0.0, "classifier_usage": None, "top_score": top_score,
+                "classify_error": None}
 
     cls = classify_question(client, question, top_score)
     if cls["answerable"] == "out_of_kb":
         return {"refs": refs, "refuse": True, "refuse_reason": cls["reason"],
                 "difficulty": cls["difficulty"], "answerable": cls["answerable"],
                 "reason": cls["reason"], "chosen_model": None,
-                "classifier_cost": cls["cost"], "classifier_usage": cls["usage"], "top_score": top_score}
+                "classifier_cost": cls["cost"], "classifier_usage": cls["usage"], "top_score": top_score,
+                "classify_error": cls["error"]}
 
     # 复杂 或 不确定 → 贵档；简单且库内 → 便宜档
     if cls["difficulty"] == "complex" or cls["answerable"] == "uncertain":
@@ -172,7 +187,8 @@ def route_decision(client, embedder, index, question: str, threshold: float | No
         chosen = config.CHEAP_MODEL
     return {"refs": refs, "refuse": False, "difficulty": cls["difficulty"],
             "answerable": cls["answerable"], "reason": cls["reason"], "chosen_model": chosen,
-            "classifier_cost": cls["cost"], "classifier_usage": cls["usage"], "top_score": top_score}
+            "classifier_cost": cls["cost"], "classifier_usage": cls["usage"], "top_score": top_score,
+            "classify_error": cls["error"]}
 
 
 # ---------- 生成（非流式，供 ask.py/评测用） ----------
@@ -197,15 +213,11 @@ def generate_with_fallback(client, model: str, messages: list[dict]) -> tuple[st
 
 
 # ---------- 一条龙（非流式，供 ask.py/评测脚本用） ----------
-def answer_question(client, embedder, index, question: str, mode: str = "route",
+def answer_question(client, embedder, index, question: str, mode: str | None = None,
                     threshold: float | None = None) -> dict:
     """检索 → 路由决策 → 拒答或生成（带降级）→ 成本。返回完整结果字典。"""
-    old_mode = config.ROUTE_MODE
-    config.ROUTE_MODE = mode  # 临时覆盖，route_decision 读取
-    try:
-        decision = route_decision(client, embedder, index, question, threshold)
-    finally:
-        config.ROUTE_MODE = old_mode
+    decision = route_decision(client, embedder, index, question, threshold=threshold, mode=mode)
+    mode = mode or config.ROUTE_MODE
 
     route_info = {
         "mode": mode,
@@ -214,6 +226,8 @@ def answer_question(client, embedder, index, question: str, mode: str = "route",
         "reason": decision["reason"],
         "chosen_model": decision["chosen_model"],
     }
+    if decision["classify_error"]:
+        route_info["classify_error"] = decision["classify_error"]
 
     if decision["refuse"]:
         return {"reply": REFUSAL_MSG, "refs": decision["refs"],
@@ -228,8 +242,10 @@ def answer_question(client, embedder, index, question: str, mode: str = "route",
     route_info["degraded"] = degraded
 
     if error:
-        return {"reply": f"⚠️ {error}", "refs": decision["refs"], "usage": None,
-                "cost": 0.0, "refused": True, "route_info": route_info, "error": error}
+        # 这是"故障"不是"拒答"：单独用 status 标记，且已发生的分类器成本要如实计入
+        return {"reply": f"⚠️ {error}", "refs": decision["refs"],
+                "usage": decision["classifier_usage"], "cost": decision["classifier_cost"],
+                "refused": False, "status": "error", "route_info": route_info, "error": error}
 
     merged = _merge_usage(usage, decision["classifier_usage"])
     total_cost = calc_cost(used_model, usage["p"], usage["c"]) + decision["classifier_cost"]
