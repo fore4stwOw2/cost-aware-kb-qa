@@ -38,7 +38,7 @@ JUDGE_MODEL = config.CLASSIFY_MODEL
 
 # category → 评测集分桶（21 典型 / 6 边界 / 3 对抗），load_eval 校验用
 _TYPICAL_CATS = {"定价", "成本", "术语"}
-_BOUNDARY_CATS = {"选型", "长上下文"}
+_BOUNDARY_CATS = {"选型", "长上下文", "长上下文加价"}
 _ADVERSARIAL_CATS = {"库外", "越权"}
 
 
@@ -273,9 +273,24 @@ def compute_arm(mode: str, rows: list[dict]) -> dict:
 
 # ---------- 报告 ----------
 def render_report(arms: list[dict]) -> str:
+    # 配比按评测集实际动态计算（避免硬编码与数据漂移）
+    rows = load_eval()
+    n_typical = sum(1 for r in rows if r["category"] in _TYPICAL_CATS)
+    n_boundary = sum(1 for r in rows if r["category"] in _BOUNDARY_CATS)
+    n_adversarial = sum(1 for r in rows if r["category"] in _ADVERSARIAL_CATS)
+
+    def in_kb_quality(arm: dict) -> float | None:
+        """只统计 in_kb 用例的质量分（库外题被拒答或硬答都不参与，保证跨臂可比）。"""
+        scores = [x["judge"]["score"] for x in arm["rows"]
+                  if x["judge"] is not None and not x["judge"].get("error") and x["gold"].endswith("in_kb")]
+        return round(sum(scores) / len(scores), 2) if scores else None
+
     lines = []
     lines.append("# W3 三臂对比评测报告")
-    lines.append(f"\n> 生成日期：{date.today().isoformat()} ｜ 评测集：`data/eval_set.csv` 30 条（21 典型 + 6 边界 + 3 对抗）")
+    lines.append(
+        f"\n> 生成日期：{date.today().isoformat()} ｜ 评测集：`data/eval_set.csv` {len(rows)} 条"
+        f"（典型 {n_typical} + 边界 {n_boundary} + 对抗 {n_adversarial}）"
+    )
     lines.append(f"> 模型：flash=`{config.CHEAP_MODEL}` pro=`{config.PREMIUM_MODEL}` 裁判=`{JUDGE_MODEL}`")
     lines.append(f"> 价格核验日期：{config.PRICE_VERIFIED_DATE} ｜ 温度=0")
     lines.append("\n## 总览")
@@ -293,11 +308,21 @@ def render_report(arms: list[dict]) -> str:
     pro_arm = next((a for a in arms if a["mode"] == "pro"), None)
     if route_arm and pro_arm and pro_arm["total_cost"] > 0:
         save_pct = (1 - route_arm["total_cost"] / pro_arm["total_cost"]) * 100
-        quality_drop = pro_arm["avg_quality"] - route_arm["avg_quality"]
-        lines.append(
-            f"\n**核心结论：路由 vs 全 pro → 省 {save_pct:.1f}% 成本，质量差 {quality_drop:.2f} 分"
-            f"（路由准确率 {route_arm['route_acc']}）**"
-        )
+        # 质量对比用 in_kb 共同子集（公平口径）：库外题 pro 硬答会拉低分，不属于路由能力差异
+        rq, pq = in_kb_quality(route_arm), in_kb_quality(pro_arm)
+        if rq is not None and pq is not None:
+            quality_drop = pq - rq
+            lines.append(
+                f"\n**核心结论：路由 vs 全 pro → 省 {save_pct:.1f}% 成本；"
+                f"in_kb 子集质量差 {quality_drop:+.2f} 分（route {rq} vs pro {pq}）"
+                f"，路由准确率 {route_arm['route_acc']}，拒答正确率 {route_arm['refuse_acc']}**"
+            )
+            lines.append(
+                f"\n（质量分按 in_kb 共同子集对比：库外题 pro/flash 固定档会硬答并被扣分，"
+                f"不属于路由本身的能力差异，故不计入对比；两臂总览的平均质量分含库外硬答扣分。）"
+            )
+        else:
+            lines.append(f"\n**核心结论：路由 vs 全 pro → 省 {save_pct:.1f}% 成本（路由准确率 {route_arm['route_acc']}）**")
     lines.append(f"\n（注：\"库外硬答\"= 库外题本应拒答却回答，flash/pro 固定档不做拒答故会硬答，已计入瞎编审计；"
                  f"\"裁判失败\"= judge 自身调用失败的题数，未参与质量分与瞎编统计。）")
 
