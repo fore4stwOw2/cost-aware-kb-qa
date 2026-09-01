@@ -2,17 +2,16 @@
 成本感知知识库问答 · W1 版（单模型）
 功能：本地知识库检索 → 带引用回答 → 显示 token 用量与估算成本 → 低相似度拒答。
 运行：streamlit run app.py
+问答逻辑在 qa_core.py（与 ask.py 自动测试共用同一条管线）。
 """
 import os
-import pickle
 
-import numpy as np
 import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
-from sentence_transformers import SentenceTransformer
 
 import config
+import qa_core
 
 load_dotenv()
 
@@ -25,7 +24,7 @@ with st.sidebar:
     st.header("设置")
     chat_model = os.getenv("CHAT_MODEL", "")
     st.caption(f"聊天模型：`{chat_model or '未配置'}`")
-    st.caption(f"价格核验日期：⚠️ {config.PRICE_VERIFIED_DATE}")
+    st.caption(f"价格核验日期：{config.PRICE_VERIFIED_DATE}")
     sim_threshold = st.slider(
         "拒答阈值（检索相似度低于它就拒答）", 0.0, 0.9, float(config.SIM_THRESHOLD), 0.05
     )
@@ -37,14 +36,13 @@ with st.sidebar:
 
 # ---------- 资源加载 ----------
 @st.cache_resource
-def load_embedder():
-    return SentenceTransformer(config.EMBED_MODEL)
+def _embedder():
+    return qa_core.load_embedder()
 
 
 @st.cache_data
-def load_index():
-    with open(config.INDEX_PATH, "rb") as f:
-        return pickle.load(f)
+def _index():
+    return qa_core.load_index()
 
 
 if not any(config.DATA_DIR.glob("*.md")) and not any(config.DATA_DIR.glob("*.txt")):
@@ -55,8 +53,8 @@ if not config.INDEX_PATH.exists():
     st.error("❌ 还没有索引。先在终端运行：`python ingest.py`")
     st.stop()
 
-index = load_index()
-embedder = load_embedder()
+index = _index()
+embedder = _embedder()
 
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
@@ -67,24 +65,6 @@ if not api_key:
     st.stop()
 
 client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL") or None)
-
-# BGE 系列模型官方建议：查询侧加指令前缀，检索更准
-QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："
-
-
-def retrieve(query: str) -> list[dict]:
-    """返回 TOP_K 个最相关切片，按相似度从高到低。"""
-    q = embedder.encode([QUERY_PREFIX + query], normalize_embeddings=True)[0]
-    scores = index["emb"] @ q
-    top_idx = np.argsort(scores)[::-1][: config.TOP_K]
-    return [
-        {
-            "score": float(scores[i]),
-            "source": index["chunks"][i]["source"],
-            "text": index["chunks"][i]["text"],
-        }
-        for i in top_idx
-    ]
 
 
 def render_meta(meta: dict) -> None:
@@ -103,11 +83,6 @@ def render_meta(meta: dict) -> None:
     st.caption(f"💰 输入 {usage['p']} tokens / 输出 {usage['c']} tokens{est} / 本次成本 ≈ ${cost:.4f}")
 
 
-def estimate_tokens(text: str) -> int:
-    """没有 usage 时的粗估：中文约 1.5-2 字 = 1 token，取 1.8 折中。"""
-    return int(len(text) / 1.8)
-
-
 # ---------- 历史消息 ----------
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -119,13 +94,13 @@ for m in st.session_state.messages:
             render_meta(m["meta"])
 
 # ---------- 新输入 ----------
-if prompt := st.chat_input("问点什么，比如：上下文窗口超过 27 万 token 后怎么计费？"):
+if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        refs = retrieve(prompt)
+        refs = qa_core.retrieve(index, embedder, prompt)
         if show_scores:
             st.caption("检索得分：" + "、".join(f"{r['score']:.2f}" for r in refs))
 
@@ -136,19 +111,12 @@ if prompt := st.chat_input("问点什么，比如：上下文窗口超过 27 万
             meta = {"refs": refs, "usage": None, "cost": 0.0}
         else:
             # ---- 正常回答分支 ----
-            context = "\n\n".join(
-                f"[{i}] （来源：{r['source']}）\n{r['text']}" for i, r in enumerate(refs, 1)
-            )
-            system_prompt = (
-                "你是企业知识库问答助手。只依据下面的参考资料回答问题，并在引用了资料的地方标注 [编号]。"
-                "如果资料不足以回答，就明确说'知识库中没有找到相关内容'，不要编造。\n\n"
-                f"参考资料：\n{context}"
-            )
             history = [
                 {"role": m["role"], "content": m["content"]}
                 for m in st.session_state.messages
                 if m["role"] in ("user", "assistant")
-            ][-6:]  # 只带最近几轮，控制输入成本
+            ]
+            api_messages = qa_core.build_messages(history, refs)
 
             usage_data: dict = {"p": 0, "c": 0, "estimated": False}
 
@@ -156,7 +124,7 @@ if prompt := st.chat_input("问点什么，比如：上下文窗口超过 27 万
                 try:
                     resp = client.chat.completions.create(
                         model=chat_model,
-                        messages=[{"role": "system", "content": system_prompt}] + history,
+                        messages=api_messages,
                         temperature=0,
                         stream=True,
                         stream_options={"include_usage": True},
@@ -172,16 +140,15 @@ if prompt := st.chat_input("问点什么，比如：上下文窗口超过 27 万
 
             reply = st.write_stream(stream_reply())
 
-            price = config.PRICE_TABLE.get(chat_model, config.FALLBACK_PRICE)
             if usage_data["p"] or usage_data["c"]:
                 input_t, output_t = usage_data["p"], usage_data["c"]
             else:  # 服务商没返回 usage，退回估算
-                input_t = estimate_tokens(system_prompt) + sum(
-                    estimate_tokens(m["content"]) for m in history
+                input_t = qa_core.estimate_tokens(api_messages[0]["content"]) + sum(
+                    qa_core.estimate_tokens(m["content"]) for m in api_messages[1:]
                 )
-                output_t = estimate_tokens(reply)
+                output_t = qa_core.estimate_tokens(reply)
                 usage_data = {"p": input_t, "c": output_t, "estimated": True}
-            cost = input_t / 1e6 * price["input"] + output_t / 1e6 * price["output"]
+            cost = qa_core.calc_cost(chat_model, input_t, output_t)
 
             if chat_model not in config.PRICE_TABLE:
                 st.caption(f"⚠️ 单价表里没有 `{chat_model}`，按占位价估算（见 config.py）")
