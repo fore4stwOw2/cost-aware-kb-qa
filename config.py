@@ -27,18 +27,19 @@ SIM_THRESHOLD = 0.30
 EMBED_MODEL = "BAAI/bge-small-zh-v1.5"
 
 # ---------- 单价表（每百万 token，美元） ----------
-# ★★ 这是你的作业：打开各家官方定价页核验后填入真实数字，并把下面的日期改成核验当天 ★★
+# 核验来源：https://api-docs.deepseek.com/quick_start/pricing （2026-09-01 访问）
+# 取"高峰时段 + 缓存未命中"的较贵价估算（保守口径）；淡季为半价、缓存命中更便宜。
 # key 必须和 .env 里的 CHAT_MODEL 完全一致才能匹配上。
 PRICE_TABLE = {
-    "deepseek-chat": {
-        "input": 0.27, "output": 1.10,
-        "note": "占位示例价，未经核验！去 api-docs.deepseek.com 核验后修改",
+    "deepseek-v4-flash": {
+        "input": 0.44, "output": 1.32,
+        "note": "高峰价；淡季减半；缓存命中输入 $0.014",
     },
-    "贵档占位-以后换成真实模型名": {
-        "input": 3.0, "output": 15.0,
-        "note": "W2 接第二档模型时替换",
+    "deepseek-v4-pro": {
+        "input": 1.32, "output": 3.96,
+        "note": "高峰价；淡季减半；W2 的'贵档'候选",
     },
 }
 # 如果 .env 里的 CHAT_MODEL 在上表找不到，就用这个兜底价（界面会标"单价未配置"）
 FALLBACK_PRICE = {"input": 1.0, "output": 2.0, "note": "单价表里没有这个模型名，占位价"}
-PRICE_VERIFIED_DATE = "未核验"   # 核验后改成 "2026-09-XX" 这样的日期
+PRICE_VERIFIED_DATE = "2026-09-01"   # 上次核验官方定价页的日期；价格变动时更新这里
