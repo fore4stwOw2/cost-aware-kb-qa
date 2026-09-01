@@ -8,6 +8,10 @@
 | model-landscape.md | https://github.com/archlizheng/AIPM-Wiki （docs/01-ai-basics/llm/model-landscape.md） | 2026-09-01 | 2026 模型盘点，数据核实至 2026-07；CC BY-NC-SA 4.0 |
 | glossary.md | https://github.com/archlizheng/AIPM-Wiki （docs/01-ai-basics/glossary.md） | 2026-09-01 | AI 术语速查表；CC BY-NC-SA 4.0 |
 | llm-cost-101.md | https://github.com/archlizheng/AIPM-Wiki （docs/02-pm-skills/cost-and-tech/llm-cost-101.md） | 2026-09-01 | token 成本测算入门；CC BY-NC-SA 4.0 |
+| deepseek-pricing-2026-09.md | https://api-docs.deepseek.com/quick_start/pricing | 2026-09-01 | 官方定价页（英文版，美元计价），含分时段/缓存/思考模式计费 |
+| openai-pricing-2026-09.md | https://platform.openai.com/docs/pricing | 2026-09-01 | 官方定价页文本 token 部分，含推理 token 计费规则与 embeddings |
+| anthropic-pricing-2026-09.md | https://docs.anthropic.com/en/docs/about-claude/pricing | 2026-09-01 | 官方定价页，含长上下文加价、prompt caching、Batch 5 折 |
+| gemini-pricing-2026-09.md | https://ai.google.dev/pricing | 2026-09-01 | 官方定价页，含 3.7 Flash 介绍价（2026-12-31 到期）与 Pro 长上下文分段计价 |
 
 > 以上 3 篇是 W1 的**种子语料**，让项目当天就能跑起来。
 > 接下来按 `02-语料收集清单.md` 抓取各家官方定价页/模型文档，每加一篇就在这张表登记一行。
