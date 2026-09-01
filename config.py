@@ -2,6 +2,7 @@
 项目配置：所有可调参数都集中在这里。
 改完任何参数后，切片/检索类参数需要重新运行 `python ingest.py`。
 """
+import os
 from pathlib import Path
 
 # ---------- 路径 ----------
@@ -25,6 +26,15 @@ SIM_THRESHOLD = 0.30
 # ---------- 模型 ----------
 # 本地向量模型（免费、离线、对中文友好），首次运行会自动下载约 100MB
 EMBED_MODEL = "BAAI/bge-small-zh-v1.5"
+
+# ---------- 双档路由（W2） ----------
+# 便宜档 / 贵档 / 分类器。允许用环境变量覆盖（供自动化测试模拟故障、Verifier 验收用）。
+CHEAP_MODEL = os.getenv("CHEAP_MODEL", "deepseek-v4-flash")
+PREMIUM_MODEL = os.getenv("PREMIUM_MODEL", "deepseek-v4-pro")
+CLASSIFY_MODEL = os.getenv("CLASSIFY_MODEL", "deepseek-v4-flash")  # 分类器用便宜档，单次约 $0.0001
+
+# 路由模式：route（默认，按分类路由）/ flash（固定便宜档）/ pro（固定贵档）
+ROUTE_MODE = os.getenv("ROUTE_MODE", "route")
 
 # ---------- 单价表（每百万 token，美元） ----------
 # 核验来源：https://api-docs.deepseek.com/quick_start/pricing （2026-09-01 访问）

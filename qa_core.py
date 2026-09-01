@@ -1,16 +1,20 @@
 """
 核心问答管线：app.py（网页界面）和 ask.py / 未来的评测脚本共用这一份逻辑。
-保证"界面上看到的回答"和"自动评测跑出来的回答"走的是同一条链路——
-这是 W3 评测结果能代表产品真实表现的前提。
+W2 新增：三维分类器（难度+可答性+理由）、双档路由、故障降级。
+保证"界面上看到的回答"和"自动评测跑出来的回答"走的是同一条链路。
 """
+import json
 import os
 import pickle
+import re
 
 import numpy as np
 
 import config
 
 QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："  # BGE 模型官方建议的查询前缀
+
+REFUSAL_MSG = "知识库中没有找到相关内容。建议查阅官方文档，或转人工支持。"
 
 
 # ---------- 加载 ----------
@@ -67,29 +71,167 @@ def calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     return input_tokens / 1e6 * price["input"] + output_tokens / 1e6 * price["output"]
 
 
-# ---------- 一条龙（非流式，供命令行/评测脚本用） ----------
-def answer_question(client, embedder, index, question: str, threshold: float | None = None) -> dict:
-    """检索 → 拒答判断 → 调用 → 成本。返回完整结果字典。"""
-    threshold = config.SIM_THRESHOLD if threshold is None else threshold
-    refs = retrieve(index, embedder, question)
+def _merge_usage(main_usage: dict, extra_usage: dict | None) -> dict:
+    if extra_usage is None:
+        return main_usage
+    return {
+        "p": main_usage["p"] + extra_usage["p"],
+        "c": main_usage["c"] + extra_usage["c"],
+        "estimated": main_usage.get("estimated") or extra_usage.get("estimated", False),
+        "route_p": extra_usage["p"],  # 路由开销单独标注
+        "route_c": extra_usage["c"],
+    }
 
-    if refs[0]["score"] < threshold:
-        return {
-            "reply": "知识库中没有找到相关内容。建议查阅官方文档，或转人工支持。",
-            "refs": refs, "usage": None, "cost": 0.0, "refused": True,
-        }
 
-    messages = build_messages([{"role": "user", "content": question}], refs)
-    model = os.getenv("CHAT_MODEL", "")
+# ---------- 分类器（W2） ----------
+_CLASSIFIER_PROMPT = """你是问答系统的路由分类器。根据用户问题输出一行 JSON（不要输出其他文字）：
+{"difficulty": "simple"|"complex", "answerable": "in_kb"|"out_of_kb"|"uncertain", "reason": "20字以内理由"}
+
+判断规则：
+- difficulty：单个事实/术语/价格查询，一段资料即可回答 = simple；需要多段资料综合、对比分析、推理、给建议 = complex。
+- answerable：问题主题属于"大模型选型/定价/成本/评测"领域 = in_kb；完全无关（天气/美食/娱乐/生活等）= out_of_kb；拿不准 = uncertain。
+- 只输出 JSON。"""
+
+
+def _parse_classify_json(text: str) -> dict | None:
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+
+def classify_question(client, question: str, top_score: float) -> dict:
+    """用便宜模型做三维分类。返回 {difficulty, answerable, reason, usage, cost}。"""
     resp = client.chat.completions.create(
-        model=model, messages=messages, temperature=0,
+        model=config.CLASSIFY_MODEL,
+        messages=[
+            {"role": "system", "content": _CLASSIFIER_PROMPT},
+            {"role": "user", "content": f"问题：{question}\n（检索到的最相关片段相似度：{top_score:.2f}）"},
+        ],
+        temperature=0,
     )
     usage = {"p": resp.usage.prompt_tokens, "c": resp.usage.completion_tokens, "estimated": False}
-    reply = resp.choices[0].message.content or ""
+    cost = calc_cost(config.CLASSIFY_MODEL, usage["p"], usage["c"])
+    parsed = _parse_classify_json(resp.choices[0].message.content or "")
+    if not parsed:
+        # 解析失败时保守处理：按 complex + uncertain 送贵档，宁可花小钱不可瞎编
+        parsed = {"difficulty": "complex", "answerable": "uncertain", "reason": "分类结果解析失败，保守送贵档"}
     return {
-        "reply": reply,
-        "refs": refs,
+        "difficulty": parsed.get("difficulty", "complex"),
+        "answerable": parsed.get("answerable", "uncertain"),
+        "reason": parsed.get("reason", ""),
         "usage": usage,
-        "cost": calc_cost(model, usage["p"], usage["c"]),
-        "refused": False,
+        "cost": cost,
     }
+
+
+# ---------- 路由决策（W2 核心，app/ask/评测共用） ----------
+def route_decision(client, embedder, index, question: str, threshold: float | None = None) -> dict:
+    """
+    返回决策字典：
+      refs, refuse, refuse_reason, difficulty, answerable, reason,
+      chosen_model, classifier_usage, classifier_cost, top_score
+    固定档（flash/pro）模式不调用分类器，也不做阈值拒答。
+    """
+    mode = config.ROUTE_MODE
+    refs = retrieve(index, embedder, question)
+    top_score = refs[0]["score"]
+
+    if mode == "flash":
+        return {"refs": refs, "refuse": False, "chosen_model": config.CHEAP_MODEL,
+                "difficulty": None, "answerable": None, "reason": "固定便宜档", "classifier_cost": 0.0,
+                "classifier_usage": None, "top_score": top_score}
+    if mode == "pro":
+        return {"refs": refs, "refuse": False, "chosen_model": config.PREMIUM_MODEL,
+                "difficulty": None, "answerable": None, "reason": "固定贵档", "classifier_cost": 0.0,
+                "classifier_usage": None, "top_score": top_score}
+
+    # route 模式
+    threshold = config.SIM_THRESHOLD if threshold is None else threshold
+    # 第一道兜底：检索得分过低 → 免费拒答（不调用分类器）
+    if top_score < threshold:
+        return {"refs": refs, "refuse": True,
+                "refuse_reason": f"检索相似度 {top_score:.2f} 低于兜底阈值 {threshold}",
+                "difficulty": None, "answerable": "out_of_kb", "reason": "", "chosen_model": None,
+                "classifier_cost": 0.0, "classifier_usage": None, "top_score": top_score}
+
+    cls = classify_question(client, question, top_score)
+    if cls["answerable"] == "out_of_kb":
+        return {"refs": refs, "refuse": True, "refuse_reason": cls["reason"],
+                "difficulty": cls["difficulty"], "answerable": cls["answerable"],
+                "reason": cls["reason"], "chosen_model": None,
+                "classifier_cost": cls["cost"], "classifier_usage": cls["usage"], "top_score": top_score}
+
+    # 复杂 或 不确定 → 贵档；简单且库内 → 便宜档
+    if cls["difficulty"] == "complex" or cls["answerable"] == "uncertain":
+        chosen = config.PREMIUM_MODEL
+    else:
+        chosen = config.CHEAP_MODEL
+    return {"refs": refs, "refuse": False, "difficulty": cls["difficulty"],
+            "answerable": cls["answerable"], "reason": cls["reason"], "chosen_model": chosen,
+            "classifier_cost": cls["cost"], "classifier_usage": cls["usage"], "top_score": top_score}
+
+
+# ---------- 生成（非流式，供 ask.py/评测用） ----------
+def _generate_once(client, model: str, messages: list[dict]) -> tuple[str, dict]:
+    resp = client.chat.completions.create(model=model, messages=messages, temperature=0)
+    usage = {"p": resp.usage.prompt_tokens, "c": resp.usage.completion_tokens, "estimated": False}
+    return resp.choices[0].message.content or "", usage
+
+
+def generate_with_fallback(client, model: str, messages: list[dict]) -> tuple[str, dict, str, bool, str | None]:
+    """主模型失败 → 重试一次 → 仍失败 → 换另一档顶上。
+    返回 (reply, usage, used_model, degraded, error)。"""
+    alt = config.PREMIUM_MODEL if model == config.CHEAP_MODEL else config.CHEAP_MODEL
+    last_err = None
+    for attempt in (model, model, alt):
+        try:
+            reply, usage = _generate_once(client, attempt, messages)
+            return reply, usage, attempt, (attempt == alt), None
+        except Exception as e:
+            last_err = e
+    return "", {"p": 0, "c": 0, "estimated": True}, model, True, f"主模型与降级模型均调用失败：{last_err}"
+
+
+# ---------- 一条龙（非流式，供 ask.py/评测脚本用） ----------
+def answer_question(client, embedder, index, question: str, mode: str = "route",
+                    threshold: float | None = None) -> dict:
+    """检索 → 路由决策 → 拒答或生成（带降级）→ 成本。返回完整结果字典。"""
+    old_mode = config.ROUTE_MODE
+    config.ROUTE_MODE = mode  # 临时覆盖，route_decision 读取
+    try:
+        decision = route_decision(client, embedder, index, question, threshold)
+    finally:
+        config.ROUTE_MODE = old_mode
+
+    route_info = {
+        "mode": mode,
+        "difficulty": decision["difficulty"],
+        "answerable": decision["answerable"],
+        "reason": decision["reason"],
+        "chosen_model": decision["chosen_model"],
+    }
+
+    if decision["refuse"]:
+        return {"reply": REFUSAL_MSG, "refs": decision["refs"],
+                "usage": decision["classifier_usage"], "cost": decision["classifier_cost"],
+                "refused": True, "route_info": route_info,
+                "refuse_reason": decision["refuse_reason"]}
+
+    messages = build_messages([{"role": "user", "content": question}], decision["refs"])
+    reply, usage, used_model, degraded, error = generate_with_fallback(
+        client, decision["chosen_model"], messages)
+    route_info["used_model"] = used_model
+    route_info["degraded"] = degraded
+
+    if error:
+        return {"reply": f"⚠️ {error}", "refs": decision["refs"], "usage": None,
+                "cost": 0.0, "refused": True, "route_info": route_info, "error": error}
+
+    merged = _merge_usage(usage, decision["classifier_usage"])
+    total_cost = calc_cost(used_model, usage["p"], usage["c"]) + decision["classifier_cost"]
+    return {"reply": reply, "refs": decision["refs"], "usage": merged, "cost": total_cost,
+            "refused": False, "route_info": route_info}
