@@ -29,9 +29,27 @@ def load_index():
 
 
 # ---------- 检索 ----------
+# 查询改写：把口语表述映射成语料里的准确写法，提升召回（W4 修复 e15 召回失败）。
+# 例："27 万 token" → "27.2 万 token"（语料写法）；"XX 怎么计费" → 补"长上下文 加价 计费"关键词。
+_QUERY_REWRITES = [
+    ("27 万", "27.2 万"), ("27万", "27.2 万"), ("27w", "27.2万"),
+    ("超过 200k", "超过 200K"), ("超 200k", "超过 200K"),
+    ("怎么计费", "怎么计费 长上下文 加价"), ("怎么收费", "怎么收费 长上下文 加价"),
+    ("超长上下文", "长上下文"), ("加价规则", "长上下文 加价规则"),
+]
+
+
+def _rewrite_query(query: str) -> str:
+    q = query
+    for src, dst in _QUERY_REWRITES:
+        if src in q:
+            q = q.replace(src, dst)
+    return q
+
+
 def retrieve(index, embedder, query: str, top_k: int | None = None) -> list[dict]:
-    """返回 TOP_K 个最相关切片，按相似度从高到低。"""
-    q = embedder.encode([QUERY_PREFIX + query], normalize_embeddings=True)[0]
+    """返回 TOP_K 个最相关切片，按相似度从高到低。查询先做改写（口语→语料表述）。"""
+    q = embedder.encode([QUERY_PREFIX + _rewrite_query(query)], normalize_embeddings=True)[0]
     scores = index["emb"] @ q
     k = top_k or config.TOP_K
     top_idx = np.argsort(scores)[::-1][:k]
@@ -148,13 +166,19 @@ def classify_question(client, question: str, top_score: float) -> dict:
 
 # ---------- 路由决策（W2 核心，app/ask/评测共用） ----------
 # 越权/泄露系统提示词的确定性拦截：这类输入不靠分类器碰运气，直接判库外。
-LEAK_PATTERNS = ("系统提示词", "系统提示", "你的提示词", "system prompt", "system_prompt",
-                 "初始指令", "内部指令", "你的指令是什么", "泄露", "无视", "忽略之前", "忽略前面的指令")
+# Reviewer 指出裸关键词会误伤合法领域问题（如"系统提示词的 token 要计入成本吗"、
+# "数据泄露风险"、"缓存命中时输入是不是被无视了"）——改为「攻击目标词 + 获取动词」
+# 组合条件，两者同时命中才判定为试图获取系统提示词，避免误伤。
+_LEAK_TARGETS = ("系统提示词", "system prompt", "system_prompt", "systemprompt",
+                 "内部指令", "初始指令", "你的指令", "你的提示词")
+_LEAK_VERBS = ("告诉我", "输出", "显示", "给我看", "复述", "重复", "泄露", "无视", "忽略")
 
 
 def _is_leak_attempt(question: str) -> bool:
     q = question.lower()
-    return any(p in q for p in LEAK_PATTERNS)
+    has_target = any(t in q for t in _LEAK_TARGETS)
+    has_verb = any(v in q for v in _LEAK_VERBS)
+    return has_target and has_verb
 
 
 def route_decision(client, embedder, index, question: str, threshold: float | None = None,

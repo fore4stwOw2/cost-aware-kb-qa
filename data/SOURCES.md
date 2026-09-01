@@ -13,6 +13,7 @@
 | anthropic-pricing-2026-09.md | https://docs.anthropic.com/en/docs/about-claude/pricing | 2026-09-01 | 官方定价页，含长上下文加价、prompt caching、Batch 5 折 |
 | gemini-pricing-2026-09.md | https://ai.google.dev/pricing | 2026-09-01 | 官方定价页，含 3.7 Flash 介绍价（2026-12-31 到期）与 Pro 长上下文分段计价 |
 | basic-terms.md | 公开资料综合整理（token/上下文窗口/温度，内容与 AIPM-Wiki llm-cost-101、glossary 一致） | 2026-09-01 | 补术语缺口：原语料无 token/上下文窗口/温度定义，W4 修复语料空缺 badcase |
+| model-selection-framework.md | https://github.com/archlizheng/AIPM-Wiki （docs/02-pm-skills/cost-and-tech/model-selection-framework.md） | 2026-09-01 | W4 补全：e18"四要素"金标准仅在 llm-cost-101 链接标题中出现、正文缺失，补该文修复评测集可答性（CC BY-NC-SA 4.0） |
 
 > 以上 3 篇是 W1 的**种子语料**，让项目当天就能跑起来。
 > 接下来按 `02-语料收集清单.md` 抓取各家官方定价页/模型文档，每加一篇就在这张表登记一行。

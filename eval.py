@@ -30,7 +30,9 @@ import config  # noqa: E402
 import qa_core  # noqa: E402
 
 EVAL_PATH = Path(config.ROOT) / "data" / "eval_set.csv"
-REPORT_PATH = Path(config.ROOT) / "docs" / "eval-report-w3.md"
+# 评测报告输出路径：默认 eval-report.md（当前轮次）；可用 --out 指定文件名，
+# 避免覆盖历史报告（W4 起各轮报告独立留存，不再原地覆盖 W3 基线）。
+REPORT_PATH = Path(config.ROOT) / "docs" / "eval-report.md"
 CACHE_PATH = Path(config.ROOT) / "data" / "eval_cache.json"   # 原始回答缓存（judge 升级后只重判不重跑）
 
 # 裁判模型：便宜档（flash）。与 spec 决策记录一致（v4 校准后确认 flash 布尔判定足够且成本可控）。
@@ -286,7 +288,7 @@ def render_report(arms: list[dict]) -> str:
         return round(sum(scores) / len(scores), 2) if scores else None
 
     lines = []
-    lines.append("# W3 三臂对比评测报告")
+    lines.append("# 三臂对比评测报告")
     lines.append(
         f"\n> 生成日期：{date.today().isoformat()} ｜ 评测集：`data/eval_set.csv` {len(rows)} 条"
         f"（典型 {n_typical} + 边界 {n_boundary} + 对抗 {n_adversarial}）"
@@ -340,12 +342,17 @@ def render_report(arms: list[dict]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="W3 三臂对比评测")
+    parser = argparse.ArgumentParser(description="三臂对比评测")
     parser.add_argument("--mode", choices=["flash", "pro", "route"], default=None,
                         help="只跑某一臂（默认跑全部三臂）")
     parser.add_argument("--rejudge", action="store_true",
                         help="加载缓存，只重跑 judge 评分（不重跑主模型调用），再重写报告")
+    parser.add_argument("--out", default=None,
+                        help="报告输出文件名（如 eval-report-w4.md，默认 eval-report.md）")
     args = parser.parse_args()
+    global REPORT_PATH
+    if args.out:
+        REPORT_PATH = Path(config.ROOT) / "docs" / args.out
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL") or None)
     rows = load_eval()
