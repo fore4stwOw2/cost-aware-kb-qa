@@ -19,8 +19,10 @@ load_dotenv()
 import config  # noqa: E402
 import qa_core  # noqa: E402
 
-# OS 级 socket 硬超时：推理模型持续慢速输出时 SDK read-timeout 不触发，
-# 这里保证任何单次网络阻塞最多等 API_TIMEOUT 秒（W5 演示稳定化实测必要）
+# OS 级 socket 超时：对 SDK 未覆盖的裸 socket 调用兜底（W5 演示稳定化）
+# 注意：httpx 客户端自带 socket 管理，不读此默认值；真正兜底靠
+#   ① OpenAI client timeout + 每次 create 的 timeout=config.API_TIMEOUT
+#   ② 演示脚本 scripts/demo_path.sh 的 killpg 进程组强杀（60s/路径，已验证）
 socket.setdefaulttimeout(config.API_TIMEOUT)
 
 
