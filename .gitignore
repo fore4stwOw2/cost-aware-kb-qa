@@ -11,3 +11,4 @@ data/index.pkl
 
 # 系统文件
 .DS_Store
+data/eval_cache.json
