@@ -354,7 +354,8 @@ def main() -> None:
     if args.out:
         REPORT_PATH = Path(config.ROOT) / "docs" / args.out
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL") or None)
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL") or None,
+                    timeout=config.API_TIMEOUT)
     rows = load_eval()
 
     if args.rejudge:

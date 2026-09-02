@@ -141,6 +141,7 @@ def classify_question(client, question: str, top_score: float) -> dict:
                 {"role": "user", "content": f"问题：{question}\n（检索到的最相关片段相似度：{top_score:.2f}）"},
             ],
             temperature=0,
+            timeout=config.API_TIMEOUT,
         )
         usage = {"p": resp.usage.prompt_tokens, "c": resp.usage.completion_tokens, "estimated": False}
         cost = calc_cost(config.CLASSIFY_MODEL, usage["p"], usage["c"])
@@ -242,7 +243,8 @@ def route_decision(client, embedder, index, question: str, threshold: float | No
 
 # ---------- 生成（非流式，供 ask.py/评测用） ----------
 def _generate_once(client, model: str, messages: list[dict]) -> tuple[str, dict]:
-    resp = client.chat.completions.create(model=model, messages=messages, temperature=0)
+    resp = client.chat.completions.create(model=model, messages=messages, temperature=0,
+                                          timeout=config.API_TIMEOUT)
     usage = {"p": resp.usage.prompt_tokens, "c": resp.usage.completion_tokens, "estimated": False}
     return resp.choices[0].message.content or "", usage
 

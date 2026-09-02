@@ -9,13 +9,19 @@
 """
 import argparse
 import os
+import socket
 import sys
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
 load_dotenv()
+import config  # noqa: E402
 import qa_core  # noqa: E402
+
+# OS 级 socket 硬超时：推理模型持续慢速输出时 SDK read-timeout 不触发，
+# 这里保证任何单次网络阻塞最多等 API_TIMEOUT 秒（W5 演示稳定化实测必要）
+socket.setdefaulttimeout(config.API_TIMEOUT)
 
 
 def _fmt_route_info(r: dict) -> str:
@@ -51,6 +57,7 @@ def main() -> None:
     client = OpenAI(
         api_key=os.getenv("OPENAI_API_KEY"),
         base_url=os.getenv("OPENAI_BASE_URL") or None,
+        timeout=config.API_TIMEOUT,
     )
     index = qa_core.load_index()
     embedder = qa_core.load_embedder()
