@@ -1,6 +1,7 @@
 # Cost-Aware KB-QA · 成本感知的知识库问答
 
-> AI 产品经理作品集项目 · 2026-09
+> AI 产品经理作品集项目 · 2026-09 ｜ **作品二**
+> 🔗 GitHub：[github.com/fore4stwOw2/cost-aware-kb-qa](https://github.com/fore4stwOw2/cost-aware-kb-qa)
 > **一句话：一个知识库问答应用，先判断问题难度，把简单问题路由到便宜模型、复杂问题路由到贵模型——用评测证明"省 37.6% 成本，质量几乎不损"。**
 
 ---
