@@ -97,6 +97,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 一次
 
 | 文档 | 内容 |
 |------|------|
+| [版本记录 CHANGELOG](docs/CHANGELOG.md) | 语义化版本 v0.1.0→v2.0.0 全演进（每阶段关键数字） |
 | [AI PRD](docs/prd.md) | 完整需求文档：效果定义（指标分层/评测集/及格线）、Prompt Spec + Eval Spec、能力边界与不承诺清单、数据回流、成本预算、兜底与风险（遵循 AIPM-Wiki PRD 指南） |
 | [W4 评测报告](docs/eval-report-w4.md) | 三臂对比最终数据 |
 | [W3 基线报告](docs/eval-report-w3.md) | 修复前基线 |
