@@ -8,6 +8,7 @@
   .venv/bin/python ask.py --threshold 0.5 "问题"        # 覆盖拒答阈值（Verifier 用）
 """
 import argparse
+import json
 import os
 import socket
 import sys
@@ -56,6 +57,8 @@ def main() -> None:
                         help="覆盖拒答阈值（默认为 config.SIM_THRESHOLD）")
     parser.add_argument("--agent", default=None,
                         help="Agent 任务：传入任务描述（如'帮我测算用 deepseek-v4-flash 做客服问答的月成本，DAU 1万'）")
+    parser.add_argument("--auto-confirm", action="store_true",
+                        help="Agent 高风险动作自动确认（供自动化测试/Verifier 用）")
     args = parser.parse_args()
 
     client = OpenAI(
@@ -66,10 +69,20 @@ def main() -> None:
 
     if args.agent:
         import agent_core
+
+        def _confirm(card):
+            if args.auto_confirm:
+                print(f"  ✅ 自动确认高风险动作: {card['action']}")
+                return True
+            ans = input(f"  ⚠️ 确认执行 {card['action']}？（对象: {card['object'][:60]}）[y/N] ")
+            return ans.strip().lower() in ("y", "yes")
+
         print("=" * 72)
         print("🤖 Agent 任务:", args.agent)
-        r = agent_core.run_agent(client, args.agent)
+        r = agent_core.run_agent(client, args.agent, confirm_callback=_confirm)
         print(f"状态: {r['status']} | 轮数: {r['turns']} | 成本: ${r['total_cost']:.4f}")
+        if r.get("card"):
+            print("  📋 确认卡:", json.dumps(r["card"], ensure_ascii=False)[:200])
         for ev in r["trace"]:
             if ev["type"] == "tool_call":
                 print(f"  🔧 t{ev['turn']} {ev['tool']} ok={ev['ok']} {ev['result_summary'][:80]}")

@@ -22,12 +22,14 @@ st.caption("W2：双档路由。分类器判断难度与可答性 → 简单走�
 # ---------- 侧边栏 ----------
 with st.sidebar:
     st.header("设置")
-    mode = st.radio("路由模式", ["route", "flash", "pro"],
-                    format_func=lambda m: {"route": "🛤️ 智能路由（默认）", "flash": "⚡ 固定便宜档", "pro": "💎 固定贵档"}[m],
+    mode = st.radio("模式", ["route", "flash", "pro", "agent"],
+                    format_func=lambda m: {"route": "🛤️ 智能路由（默认）", "flash": "⚡ 固定便宜档",
+                                           "pro": "💎 固定贵档", "agent": "🤖 Agent 任务"}[m],
                     index=0)
     st.caption(f"便宜档：`{config.CHEAP_MODEL}`（约 $0.44/$1.32）")
     st.caption(f"贵档：`{config.PREMIUM_MODEL}`（约 $1.32/$3.96）")
     st.caption(f"分类器：`{config.CLASSIFY_MODEL}`（单次约 $0.0001）")
+    st.caption(f"Agent 规划：`{config.AGENT_MODEL}`（上限 {config.AGENT_MAX_TURNS} 轮 / ${config.AGENT_MAX_COST}）")
     st.caption(f"价格核验日期：{config.PRICE_VERIFIED_DATE}")
 
     sim_threshold = st.slider(
@@ -113,6 +115,58 @@ def render_meta(meta: dict) -> None:
     st.caption(f"💰 输入 {usage['p']} tokens / 输出 {usage['c']} tokens{est}{extra} / 本次成本 ≈ ${cost:.4f}")
 
 
+def render_trace(trace: list[dict]) -> None:
+    """Agent 轨迹渲染（B2）：工具调用序列 + 策略事件。"""
+    with st.expander("🛰️ Agent 轨迹", expanded=True):
+        for ev in trace:
+            t = ev["type"]
+            if t == "tool_call":
+                st.markdown(f"🔧 **t{ev['turn']} {ev['tool']}**"
+                            f"（ok={ev['ok']}）`{ev['args_summary'][:80]}`")
+                st.caption(ev["result_summary"][:200])
+            elif t == "policy_check":
+                icon = {"waiting_approval": "⚠️", "approved": "✅", "cancelled": "🚫",
+                        "budget_turns": "⛔", "budget_cost": "⛔", "blacklist": "🛡️"}.get(
+                    ev.get("policy"), "🛡️")
+                st.caption(f"{icon} 策略[{ev.get('policy')}] {ev.get('detail', '')[:120]}")
+            elif t == "model_turn" and "error" in ev:
+                st.caption(f"❌ 模型调用失败 t{ev['turn']}: {ev['error'][:120]}")
+            elif t == "final_result":
+                st.markdown(f"🏁 最终回答（t{ev.get('turn', '-')}）")
+
+
+# ---------- Agent 确认闸门（两阶段：先跑到闸门→用户确认→带决定重跑） ----------
+agent_pending = st.session_state.get("agent_pending")
+if agent_pending is not None:
+    card = agent_pending["card"]
+    st.warning("⚠️ 高风险动作需要人工确认")
+    st.json(card)
+    c1, c2 = st.columns(2)
+    if c1.button("✅ 确认执行（dry-run）", key="agent_confirm_yes"):
+        st.session_state["agent_decision"] = True
+        st.rerun()
+    if c2.button("🚫 拒绝并取消", key="agent_confirm_no"):
+        st.session_state["agent_decision"] = False
+        st.rerun()
+
+    decision = st.session_state.get("agent_decision")
+    if decision is not None:
+        import agent_core
+        st.session_state.pop("agent_pending", None)
+        st.session_state.pop("agent_decision", None)
+        with st.chat_message("assistant"):
+            r = agent_core.run_agent(client, agent_pending["task"],
+                                     confirm_callback=lambda _card: decision)
+            if r["status"] == "cancelled":
+                st.markdown("🚫 已取消：未执行任何副作用。")
+            elif r["status"] == "succeeded":
+                render_trace(r["trace"])
+                st.markdown(r["answer"] or "（无回答）")
+            else:
+                st.markdown(f"状态：`{r['status']}`")
+            st.caption(f"Agent 成本 ${r['total_cost']:.4f} / {r['turns']} 轮")
+        st.session_state.messages.append({"role": "assistant", "content": "（Agent 任务结束）"})
+
 # ---------- 历史消息 ----------
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -131,6 +185,35 @@ if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
+        # ---- Agent 模式（B2）：任务循环 + 确认闸门 ----
+        if mode == "agent":
+            import agent_core
+            st.session_state.pop("agent_pending", None)
+            st.session_state.pop("agent_decision", None)
+
+            def _confirm(card):
+                st.session_state["agent_pending"] = {"card": card, "task": prompt}
+                return False  # 先停到闸门，等用户按钮后带决定重跑
+
+            r = agent_core.run_agent(client, prompt, confirm_callback=_confirm)
+            if r["status"] == "needs_confirmation":
+                st.info("⏳ 任务已暂停在高风险动作前，请在上方确认卡选择。")
+            elif r["status"] == "succeeded":
+                render_trace(r["trace"])
+                st.markdown(r["answer"] or "（无回答）")
+                st.caption(f"🤖 Agent 成本 ${r['total_cost']:.4f} / {r['turns']} 轮")
+                st.session_state.total_cost = st.session_state.get("total_cost", 0.0) + r["total_cost"]
+            elif r["status"] == "blocked":
+                render_trace(r["trace"])
+                st.warning("⛔ 预算/轮数触顶，任务已停止（未静默继续）。")
+                st.caption(f"🤖 Agent 成本 ${r['total_cost']:.4f} / {r['turns']} 轮")
+            else:
+                render_trace(r["trace"])
+                st.markdown(f"状态：`{r['status']}`")
+            st.session_state.messages.append({"role": "assistant", "content": f"（Agent: {r['status']}）"})
+            st.rerun() if r["status"] == "needs_confirmation" else None
+            st.stop()
+
         # 路由决策（分类器在这里调用）
         decision = qa_core.route_decision(client, embedder, index, prompt,
                                           threshold=sim_threshold, mode=mode)

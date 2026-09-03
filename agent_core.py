@@ -52,9 +52,13 @@ def _parse_json(text: str) -> dict | None:
 
 
 def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
-              max_cost: float | None = None) -> dict:
+              max_cost: float | None = None,
+              confirm_callback=None) -> dict:
     """执行一次 Agent 任务。返回 {status, answer, trace, total_cost, turns}。
-    status: succeeded / blocked（预算触顶）/ needs_confirmation（需人工确认）/ failed"""
+    status: succeeded / blocked（预算触顶）/ needs_confirmation（需人工确认）/
+            cancelled（用户拒绝）/ failed
+    confirm_callback(card: dict) -> bool：高风险工具触发确认闸门时调用；
+    返回 True=批准继续执行，False=拒绝并取消（不重放副作用）。"""
     max_turns = config.AGENT_MAX_TURNS if max_turns is None else max_turns
     max_cost = config.AGENT_MAX_COST if max_cost is None else max_cost
     registry = build_registry()
@@ -137,6 +141,33 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
 
         tool_name = parsed.get("tool", "")
         args = parsed.get("args", {})
+
+        # ---- 确认闸门（B2）：高风险工具在执行前必须人工确认 ----
+        risk = registry.get_risk(tool_name)
+        if risk == "high":
+            card = {
+                "action": tool_name,
+                "object": json.dumps(args, ensure_ascii=False)[:200],
+                "scope": "演示环境 dry-run（不真实外发）",
+                "consequence": "将生成模拟导出回执；真实副作用零",
+                "reversible": False,
+                "deny_path": "拒绝后任务取消，不重放副作用",
+                "turn": turn,
+            }
+            trace.append({"type": "policy_check", "policy": "waiting_approval",
+                          "detail": f"工具 {tool_name} 为高风险，等待人工确认"})
+            if confirm_callback is None:
+                return {"status": "needs_confirmation", "answer": None, "card": card,
+                        "trace": trace, "total_cost": round(total_cost, 4), "turns": turn}
+            approved = confirm_callback(card)
+            if not approved:
+                trace.append({"type": "policy_check", "policy": "cancelled",
+                              "detail": f"用户拒绝 {tool_name}，任务取消且不重放副作用"})
+                return {"status": "cancelled", "answer": None,
+                        "trace": trace, "total_cost": round(total_cost, 4), "turns": turn}
+            trace.append({"type": "policy_check", "policy": "approved",
+                          "detail": f"用户已确认 {tool_name}，继续执行（dry-run）"})
+
         try:
             result = registry.call(tool_name, args)
         except Exception as e:  # 工具执行异常不允许穿透 run_agent（Reviewer 🔴-2）
@@ -148,13 +179,6 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
             "result_summary": json.dumps(result.get("data") or result.get("error"),
                                          ensure_ascii=False)[:300],
         })
-
-        # 需人工确认：B1 无确认闸门，停止循环避免空耗预算（Reviewer 🟡-5）
-        if result.get("policy") == "needs_confirmation":
-            trace.append({"type": "policy_check", "policy": "needs_confirmation",
-                          "detail": f"工具 {tool_name} 需人工确认（B2 实现），本次停止"})
-            return {"status": "needs_confirmation", "answer": None,
-                    "trace": trace, "total_cost": round(total_cost, 4), "turns": turn}
 
         # OpenAI 兼容协议：assistant 消息必须带 tool_calls，tool 消息回 tool_call_id
         tool_call_id = f"call_{task_id}_{turn}"
