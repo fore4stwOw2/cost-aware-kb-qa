@@ -349,6 +349,36 @@ class TestTraceStructure(unittest.TestCase):
         r = agent_core.run_agent(self.FakeClient(seq), "任务", confirm_callback=bad_cb)
         self.assertEqual(r["status"], "failed")
 
+    def test_card_fields_complete(self):
+        """确认卡六要素逐字段断言（AC2）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+        ]
+        r = agent_core.run_agent(self.FakeClient(seq), "导出", confirm_callback=None)
+        card = r["card"]
+        self.assertEqual(card["action"], "report.export")
+        self.assertIn("d1", card["object"])
+        self.assertIn("dry-run", card["scope"])
+        self.assertIn("模拟", card["consequence"])
+        self.assertIs(card["reversible"], False)
+        self.assertIn("拒绝", card["deny_path"])
+
+    def test_approved_trace_records_dry_run(self):
+        """approved 后 trace 中应出现 dry-run 回执（AC1 完整链路）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+            '已导出',
+        ]
+        r = agent_core.run_agent(self.FakeClient(seq), "导出", confirm_callback=lambda c: True)
+        self.assertEqual(r["status"], "succeeded")
+        tool_evs = [ev for ev in r["trace"] if ev["type"] == "tool_call"]
+        self.assertEqual(tool_evs[0]["tool"], "report.export")
+        self.assertIn("EXPORT-SIM-", tool_evs[0]["result_summary"])
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertIn("approved", policies)
+
     def test_parse_json_robust(self):
         from agent_core import _parse_json
         self.assertIsNone(_parse_json("no json here"))
