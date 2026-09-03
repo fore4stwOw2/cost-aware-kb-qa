@@ -342,9 +342,9 @@ def render_report(arms: list[dict]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="三臂对比评测")
-    parser.add_argument("--mode", choices=["flash", "pro", "route"], default=None,
-                        help="只跑某一臂（默认跑全部三臂）")
+    parser = argparse.ArgumentParser(description="三臂对比评测 / Agent 轨迹评测")
+    parser.add_argument("--mode", choices=["flash", "pro", "route", "agent"], default=None,
+                        help="跑某一臂；agent = Agent 轨迹评测（B3）")
     parser.add_argument("--rejudge", action="store_true",
                         help="加载缓存，只重跑 judge 评分（不重跑主模型调用），再重写报告")
     parser.add_argument("--out", default=None,
@@ -353,6 +353,12 @@ def main() -> None:
     global REPORT_PATH
     if args.out:
         REPORT_PATH = Path(config.ROOT) / "docs" / args.out
+
+    # Agent 轨迹评测（B3）：独立路径，不走三臂缓存
+    if args.mode == "agent":
+        import agent_eval
+        agent_eval.main_agent_eval(REPORT_PATH)
+        return
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL") or None,
                     timeout=config.API_TIMEOUT)
