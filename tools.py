@@ -6,6 +6,7 @@ Agent 工具层（B1）：工具注册表 + 服务端 Schema 校验 + 风险分�
 - 只读/可逆/不可逆 三级风险标记，供 B2 确认闸门使用
 """
 import json
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -74,6 +75,10 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
+    def get_risk(self, name: str) -> str | None:
+        t = self._tools.get(name)
+        return t.risk if t else None
+
     def list_names(self) -> list[str]:
         return sorted(self._tools.keys())
 
@@ -108,9 +113,6 @@ class ToolRegistry:
             return {"ok": False, "error": f"工具执行异常: {e}", "policy": "handler_error"}
         if result is None:  # handler 返回 None = 业务失败（如查无此模型）
             return {"ok": False, "error": f"{name}: 未找到请求的对象（参数需修正）", "policy": "not_found"}
-        if isinstance(result, dict) and result.get("policy") == "needs_confirmation":
-            return {"ok": False, "error": result.get("error", "需人工确认"),
-                    "policy": "needs_confirmation"}
         return {"ok": True, "data": result, "policy": "allowed"}
 
 
@@ -186,9 +188,14 @@ def _report_draft(args: dict) -> dict:
 
 
 def _report_export(args: dict) -> dict:
-    """高风险工具：B1 阶段返回需确认，实际导出在 B2 经确认卡后 dry-run。"""
-    return {"ok": False, "error": "导出需人工确认（确认闸门在 B2 实现），本次未执行任何外发",
-            "policy": "needs_confirmation"}
+    """高风险工具：仅在人工确认后调用（闸门在 agent_core 按 risk 分级）。
+    此处执行 dry-run 模拟导出，返回回执证据（不真实外发）。"""
+    return {
+        "status": "dry_run_export",
+        "receipt": f"EXPORT-SIM-{uuid.uuid4().hex[:8].upper()}",
+        "channel": args.get("channel", "email"),
+        "note": "dry-run 模拟导出完成：真实外发未执行（演示环境零副作用）",
+    }
 
 
 def build_registry() -> ToolRegistry:

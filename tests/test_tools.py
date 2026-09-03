@@ -116,11 +116,20 @@ class TestReportTools(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertEqual(r["data"]["status"], "draft")
 
-    def test_export_needs_confirmation(self):
+    def test_export_dry_run_receipt(self):
+        """B2：report.export 的闸门在 agent_core 层（risk=high）；
+        直接调 handler 是 dry-run，返回回执且不真实外发。"""
         reg = build_registry()
         r = reg.call("report.export", {"draft_id": "d1", "channel": "email"})
-        self.assertFalse(r["ok"])
-        self.assertEqual(r["policy"], "needs_confirmation")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["data"]["status"], "dry_run_export")
+        self.assertIn("EXPORT-SIM-", r["data"]["receipt"])
+
+    def test_export_risk_is_high(self):
+        reg = build_registry()
+        self.assertEqual(reg.get_risk("report.export"), "high")
+        self.assertEqual(reg.get_risk("price.lookup"), "low")
+        self.assertEqual(reg.get_risk("report.draft"), "medium")
 
 
 class TestTraceStructure(unittest.TestCase):
@@ -217,6 +226,158 @@ class TestTraceStructure(unittest.TestCase):
         seq = ['']
         r = agent_core.run_agent(self.FakeClient(seq), "任务")
         self.assertEqual(r["status"], "failed")
+
+    def test_confirmation_gate_high_risk_no_callback(self):
+        """高风险工具无回调 → needs_confirmation + 确认卡（AC1/AC2）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+        ]
+        r = agent_core.run_agent(self.FakeClient(seq), "导出报告")
+        self.assertEqual(r["status"], "needs_confirmation")
+        card = r.get("card", {})
+        for field in ("action", "object", "scope", "consequence", "reversible", "deny_path"):
+            self.assertIn(field, card, f"确认卡缺少字段 {field}")
+        # trace 记录 waiting_approval 策略
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertIn("waiting_approval", policies)
+
+    def test_confirmation_gate_approved(self):
+        """用户批准 → 执行 dry-run 并拿到回执，最终 succeeded（AC1）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+            'gpt-5 报告已导出，回执 EXPORT-SIM-XXX（dry-run）',
+        ]
+        decisions = []
+        r = agent_core.run_agent(self.FakeClient(seq), "导出报告",
+                                 confirm_callback=lambda card: decisions.append(True) or True)
+        self.assertEqual(r["status"], "succeeded")
+        self.assertEqual(decisions, [True])
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertIn("approved", policies)
+        # dry-run 回执应出现在工具结果里
+        tool_evs = [ev for ev in r["trace"] if ev["type"] == "tool_call"]
+        self.assertIn("EXPORT-SIM-", tool_evs[0]["result_summary"])
+
+    def test_confirmation_gate_denied_cancelled(self):
+        """用户拒绝 → cancelled，且不执行副作用（AC1/AC4）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+        ]
+        r = agent_core.run_agent(self.FakeClient(seq), "导出报告",
+                                 confirm_callback=lambda card: False)
+        self.assertEqual(r["status"], "cancelled")
+        # 拒绝后不应有已执行的 tool_call 事件（副作用未发生）
+        tool_evs = [ev for ev in r["trace"] if ev["type"] == "tool_call"]
+        self.assertEqual(len(tool_evs), 0)
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertIn("cancelled", policies)
+
+    def test_low_risk_no_confirmation(self):
+        """只读工具自动执行，不触发确认（AC6）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "price.lookup", "args": {"model": "gpt-5"}}',
+            'gpt-5 价格 $1.25/$10',
+        ]
+        called = []
+        r = agent_core.run_agent(self.FakeClient(seq), "查价格",
+                                 confirm_callback=lambda card: called.append(card) or True)
+        self.assertEqual(r["status"], "succeeded")
+        self.assertEqual(called, [], "只读工具不应触发确认回调")
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertNotIn("waiting_approval", policies)
+
+    def test_medium_risk_no_confirmation(self):
+        """可逆写入（草稿）自动执行，不触发确认（AC6）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.draft", "args": {"title": "报告"}}',
+            '草稿已生成',
+        ]
+        called = []
+        r = agent_core.run_agent(self.FakeClient(seq), "生成草稿",
+                                 confirm_callback=lambda card: called.append(card) or True)
+        self.assertEqual(r["status"], "succeeded")
+        self.assertEqual(called, [], "medium 风险工具不应触发确认回调")
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertNotIn("waiting_approval", policies)
+
+    def test_budget_cost_blocked(self):
+        """费用触顶 → blocked（AC3：budget_cost 路径）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "price.lookup", "args": {"model": "gpt-5"}}',
+            'gpt-5 价格 $1.25/$10',
+        ]
+        r = agent_core.run_agent(self.FakeClient(seq), "任务", max_cost=0.000001)
+        self.assertEqual(r["status"], "blocked")
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertIn("budget_cost", policies)
+
+    def test_denied_after_prior_low_risk_no_replay(self):
+        """多轮场景：用户先批准 low 工具执行，后拒绝 high 工具 →
+        cancelled 且被拒工具无执行事件（AC4：不重放，覆盖多工具序列）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "price.lookup", "args": {"model": "gpt-5"}}',
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+        ]
+        decisions = []
+        def cb(card):
+            decisions.append(card["action"])
+            return card["action"] != "report.export"  # 拒绝 export
+        r = agent_core.run_agent(self.FakeClient(seq), "任务", confirm_callback=cb)
+        self.assertEqual(r["status"], "cancelled")
+        self.assertEqual(decisions, ["report.export"], "low 工具不应触发回调，只有 export 触发")
+        tool_evs = [ev for ev in r["trace"] if ev["type"] == "tool_call"]
+        self.assertEqual(len(tool_evs), 1, "只应有 price.lookup 执行；export 被拒未执行")
+        self.assertEqual(tool_evs[0]["tool"], "price.lookup")
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertIn("cancelled", policies)
+
+    def test_confirm_callback_exception_handled(self):
+        """回调抛异常不穿透 run_agent（Reviewer 🟡-8）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+        ]
+        def bad_cb(card):
+            raise RuntimeError("回调崩溃")
+        r = agent_core.run_agent(self.FakeClient(seq), "任务", confirm_callback=bad_cb)
+        self.assertEqual(r["status"], "failed")
+
+    def test_card_fields_complete(self):
+        """确认卡六要素逐字段断言（AC2）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+        ]
+        r = agent_core.run_agent(self.FakeClient(seq), "导出", confirm_callback=None)
+        card = r["card"]
+        self.assertEqual(card["action"], "report.export")
+        self.assertIn("d1", card["object"])
+        self.assertIn("dry-run", card["scope"])
+        self.assertIn("模拟", card["consequence"])
+        self.assertIs(card["reversible"], False)
+        self.assertIn("拒绝", card["deny_path"])
+
+    def test_approved_trace_records_dry_run(self):
+        """approved 后 trace 中应出现 dry-run 回执（AC1 完整链路）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+            '已导出',
+        ]
+        r = agent_core.run_agent(self.FakeClient(seq), "导出", confirm_callback=lambda c: True)
+        self.assertEqual(r["status"], "succeeded")
+        tool_evs = [ev for ev in r["trace"] if ev["type"] == "tool_call"]
+        self.assertEqual(tool_evs[0]["tool"], "report.export")
+        self.assertIn("EXPORT-SIM-", tool_evs[0]["result_summary"])
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertIn("approved", policies)
 
     def test_parse_json_robust(self):
         from agent_core import _parse_json
