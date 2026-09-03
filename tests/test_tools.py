@@ -203,6 +203,21 @@ class TestTraceStructure(unittest.TestCase):
         self.assertEqual(tool_evs[0]["ok"], False)
         self.assertEqual(tool_evs[0]["policy"], "blacklist")
 
+    def test_plain_text_final_answer(self):
+        """B1 修复：模型输出非 JSON 纯文本时按最终回答处理，不整体 failed（Verifier 复验抓到的模式）。"""
+        import agent_core
+        seq = ['gpt-5 月成本约 $9.75，deepseek-v4-flash 约 $2.77，核验日期 2026-09-01。']
+        r = agent_core.run_agent(self.FakeClient(seq), "测算成本")
+        self.assertEqual(r["status"], "succeeded")
+        self.assertIn("9.75", r["answer"])
+        self.assertEqual(r["trace"][-1]["type"], "final_result")
+
+    def test_empty_output_fails(self):
+        import agent_core
+        seq = ['']
+        r = agent_core.run_agent(self.FakeClient(seq), "任务")
+        self.assertEqual(r["status"], "failed")
+
     def test_parse_json_robust(self):
         from agent_core import _parse_json
         self.assertIsNone(_parse_json("no json here"))

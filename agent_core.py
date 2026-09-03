@@ -19,11 +19,11 @@ from tools import build_registry
 # few-shot 固定格式，减少解析失败（wiki：planning 提示词用 few-shot 固定工具选择格式）
 _PLANNER_PROMPT = """你是「模型选型测算助手」。用户给你一个选型/成本测算任务，你可以调用工具获取信息，最后给出带依据的回答。
 
-每次只输出一行 JSON，二选一：
-1) 需要更多信息时：
+每轮输出二选一：
+1) 需要调用工具时，输出一行 JSON（不要其他文字）：
 {"action": "tool_call", "tool": "<工具名>", "args": {...}}
-2) 信息足够时：
-{"action": "final", "answer": "<最终回答，必须引用工具返回的具体数字和来源>"}
+2) 信息足够时，直接输出最终回答（纯文本，不要用 JSON 包裹，不要输出大括号对象）：
+直接写出带数字和依据的完整回答即可。
 
 可用工具：
 {tools_json}
@@ -32,7 +32,13 @@ _PLANNER_PROMPT = """你是「模型选型测算助手」。用户给你一个�
 - 不要编造价格或数字，必须通过工具获取（price.lookup / cost.estimate / kb.search）
 - 一次只调用一个工具，等待结果后再决定下一步
 - 预算或轮数到顶时必须停止并给出"已完成/未完成"说明
-- 只输出 JSON，不要输出其他文字"""
+- 工具调用输出 JSON；最终回答输出纯文本"""
+
+
+def _looks_like_final_answer(content: str) -> bool:
+    """模型输出非 JSON 时，视为最终回答（纯文本）而非失败。
+    B1 修复：planner 提示词已要求最终回答用纯文本，此处兜底容错。"""
+    return bool(content and content.strip())
 
 
 def _parse_json(text: str) -> dict | None:
@@ -99,7 +105,14 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
             except Exception as e:
                 last_err = str(e)
         if parsed is None:
-            trace.append({"type": "model_turn", "turn": turn, "error": last_err or "两次均失败"})
+            # B1 修复：planner 提示词已要求最终回答用纯文本；非 JSON 输出按最终回答处理，
+            # 不再整体 failed（Verifier 复验抓到的失败模式）
+            if _looks_like_final_answer(content):
+                trace.append({"type": "final_result", "turn": turn, "answer": content[:200],
+                              "note": "纯文本回答（非 JSON）"})
+                return {"status": "succeeded", "answer": content,
+                        "trace": trace, "total_cost": round(total_cost, 4), "turns": turn}
+            trace.append({"type": "model_turn", "turn": turn, "error": last_err or "两次均无输出"})
             return {"status": "failed", "answer": None,
                     "trace": trace, "total_cost": round(total_cost, 4), "turns": turn - 1}
 
