@@ -86,6 +86,7 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
                 resp = client.chat.completions.create(
                     model=model, messages=messages, temperature=0,
                     timeout=config.API_TIMEOUT,
+                    extra_body={"reasoning_effort": "low"},  # 降推理：省成本+减少 thinking 波动
                 )
                 msg = resp.choices[0].message
                 content = msg.content or ""
@@ -147,6 +148,7 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
         assistant_msg = {
             "role": "assistant",
             "content": content,
+            "reasoning_content": reasoning_content or "",  # DeepSeek thinking 模式：字段必须始终存在
             "tool_calls": [{
                 "id": tool_call_id,
                 "type": "function",
@@ -154,8 +156,6 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
                              "arguments": json.dumps(args, ensure_ascii=False)},
             }],
         }
-        if reasoning_content:  # DeepSeek 推理模型要求回传思考内容
-            assistant_msg["reasoning_content"] = reasoning_content
         messages.append(assistant_msg)
         messages.append({"role": "tool", "tool_call_id": tool_call_id,
                          "content": json.dumps(result, ensure_ascii=False)})
