@@ -1,0 +1,45 @@
+{
+  "meta": {
+    "description": "模型价格表（每百万 token，美元）——由 data/docs/*-pricing-*.md 提炼，供 Agent 的 price.lookup 工具使用",
+    "verified_date": "2026-09-01",
+    "note": "DeepSeek 取高峰价（保守口径，淡季为半价）；Gemini 3.7 Flash 为介绍价（2026-12-31 到期后 $1.50/$7.50）",
+    "sources": {
+      "DeepSeek": "https://api-docs.deepseek.com/quick_start/pricing",
+      "OpenAI": "https://platform.openai.com/docs/pricing",
+      "Anthropic": "https://docs.anthropic.com/en/docs/about-claude/pricing",
+      "Gemini": "https://ai.google.dev/pricing"
+    }
+  },
+  "models": {
+    "deepseek-v4-flash": {
+      "provider": "DeepSeek", "input": 0.44, "output": 1.32,
+      "note": "高峰价；淡季输入 $0.22 / 输出 $0.66"
+    },
+    "deepseek-v4-pro": {
+      "provider": "DeepSeek", "input": 1.32, "output": 3.96,
+      "note": "高峰价；淡季输入 $0.66 / 输出 $1.98"
+    },
+    "gpt-5.2": {"provider": "OpenAI", "input": 1.75, "output": 14.0},
+    "gpt-5.1": {"provider": "OpenAI", "input": 1.25, "output": 10.0},
+    "gpt-5": {"provider": "OpenAI", "input": 1.25, "output": 10.0},
+    "gpt-5-mini": {"provider": "OpenAI", "input": 0.25, "output": 2.0},
+    "gpt-5-nano": {"provider": "OpenAI", "input": 0.05, "output": 0.4},
+    "gpt-5.2-pro": {"provider": "OpenAI", "input": 21.0, "output": 168.0},
+    "gpt-5-pro": {"provider": "OpenAI", "input": 15.0, "output": 120.0},
+    "gpt-4.1": {"provider": "OpenAI", "input": 2.0, "output": 8.0},
+    "gpt-4.1-mini": {"provider": "OpenAI", "input": 0.4, "output": 1.6},
+    "claude-opus-4-1": {"provider": "Anthropic", "input": 15.0, "output": 75.0},
+    "claude-sonnet-4": {"provider": "Anthropic", "input": 3.0, "output": 15.0},
+    "claude-haiku-3-5": {"provider": "Anthropic", "input": 0.8, "output": 4.0},
+    "claude-haiku-3": {"provider": "Anthropic", "input": 0.25, "output": 1.25},
+    "gemini-3.7-flash": {"provider": "Gemini", "input": 0.75, "output": 3.75,
+                         "note": "介绍价至 2026-12-31，之后 $1.50/$7.50"},
+    "gemini-3.5-flash": {"provider": "Gemini", "input": 1.5, "output": 9.0},
+    "gemini-3.5-flash-lite": {"provider": "Gemini", "input": 0.3, "output": 2.5},
+    "gemini-3.1-flash-lite": {"provider": "Gemini", "input": 0.25, "output": 1.5},
+    "gemini-3.1-pro": {"provider": "Gemini", "input": 2.0, "output": 12.0,
+                       "note": ">200K: 输入 $4 / 输出 $18"},
+    "gemini-2.5-pro": {"provider": "Gemini", "input": 1.25, "output": 10.0,
+                       "note": ">200K: 输入 $2.5 / 输出 $15"}
+  }
+}

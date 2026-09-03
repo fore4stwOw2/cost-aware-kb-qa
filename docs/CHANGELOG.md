@@ -4,6 +4,20 @@
 > W1-W4 为存量阶段（提交历史平铺于 main，补打 tag 作为锚点）；W5 起按分支规范执行。
 > 每条记录包含版本号 / 日期 / 阶段 / 关键结果 / 关联文档，与评测报告（`docs/eval-report-vX.Y.Z.md`）交叉核对。
 
+## v1.1.0 · Agent 二期 B1 工具层（2026-09-03）
+
+**一句话**：作品二从"RAG 问答"迈出到"Agent 任务"第一步——工具注册与执行层 + 最小 planning→tool→observe 循环。
+
+**新增**：
+- `tools.py`：工具注册表（kb.search / price.lookup / cost.estimate / report.draft / report.export），Schema 校验（类型/必填/enum/minimum/maximum + args 守卫）、风险分级、refund.create 黑名单服务端拒绝
+- `data/prices.json`：4 家/21 模型结构化价格表（核验 2026-09-01）
+- `agent_core.py`：run_agent 最小循环（预算闸门 8 轮/$0.02、trace 事件链、needs_confirmation 预留、DeepSeek reasoning_content 兼容）
+- `ask.py --agent`：命令行 Agent 任务入口；`tests/` 24 条单测
+
+**关键结果**：端到端选型测算任务 3/3 连续成功（含查价/检索/成本估算/对比结论，回答含数字与核验日期）；修复两轮"多轮循环不确定性"问题（reasoning_content 字段回传、非 JSON 纯文本收尾容错）。
+
+**关联**：[spec-w5-agent](docs/spec-w5-agent.md) · [验收报告](docs/acceptance-b1.md) · [问题日志](docs/problem-log.md)
+
 ## v1.0.0 · W6 材料收官（2026-09-03）★ RAG 作品 1.0
 
 **一句话**：面试材料成文，作品可对外完整展示——讲解稿、简历条目、版本标注全部齐备。
