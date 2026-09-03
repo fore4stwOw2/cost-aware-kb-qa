@@ -37,6 +37,11 @@ CLASSIFY_MODEL = os.getenv("CLASSIFY_MODEL", "deepseek-v4-flash")  # 分类器�
 # 路由模式：route（默认，按分类路由）/ flash（固定便宜档）/ pro（固定贵档）
 ROUTE_MODE = os.getenv("ROUTE_MODE", "route")
 
+# API 超时（秒）：网络挂起时不允许无限等待（演示/评测都可能卡死）
+# W5 演示稳定化新增：实测一次复杂题调用无超时挂了 2 小时；当前网络下简单题也要 ~15s
+# 演示场景 30s 足够正常回答；评测跑长任务可用环境变量 API_TIMEOUT 覆盖调大
+API_TIMEOUT = float(os.getenv("API_TIMEOUT", "30"))
+
 # ---------- 单价表（每百万 token，美元） ----------
 # 核验来源：https://api-docs.deepseek.com/quick_start/pricing （2026-09-01 访问）
 # 取"高峰时段 + 缓存未命中"的较贵价估算（保守口径）；淡季为半价、缓存命中更便宜。

@@ -1,0 +1,14 @@
+# 路径1存档
+# 用时: 926.6s  退出码: 0
+
+========================================================================
+Q: deepseek-v4-flash 的输出价格是多少？
+🧭 模式=route | 难度=simple 可答性=in_kb | 选档=deepseek-v4-flash 实际=deepseek-v4-flash | 理由=单一价格点查询
+A: 根据参考资料，deepseek-v4-flash 的输出价格为：淡季每百万 token $0.66，高峰每百万 token $1.32 [1]。
+[tokens] 入 1516 / 出 200（含路由 413入/83出）   [成本] $0.0009
+========================================================================
+本轮 1 题合计成本: $0.0009
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Loading weights:   0%|          | 0/71 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 71/71 [00:00<00:00, 8043.53it/s]

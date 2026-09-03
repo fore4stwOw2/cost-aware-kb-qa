@@ -69,7 +69,8 @@ if not api_key:
     )
     st.stop()
 
-client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL") or None)
+client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL") or None,
+                timeout=config.API_TIMEOUT)
 
 
 def render_route_line(meta: dict) -> None:
@@ -180,6 +181,7 @@ if prompt := st.chat_input("问点什么，比如：Claude Sonnet 4 多少钱？
                         resp = client.chat.completions.create(
                             model=attempt, messages=api_messages, temperature=0,
                             stream=True, stream_options={"include_usage": True},
+                            timeout=config.API_TIMEOUT,
                         )
                         stream_state["used_model"] = attempt
                         stream_state["degraded"] = (attempt == alt)

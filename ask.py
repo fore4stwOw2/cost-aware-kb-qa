@@ -9,13 +9,21 @@
 """
 import argparse
 import os
+import socket
 import sys
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
 load_dotenv()
+import config  # noqa: E402
 import qa_core  # noqa: E402
+
+# OS 级 socket 超时：对 SDK 未覆盖的裸 socket 调用兜底（W5 演示稳定化）
+# 注意：httpx 客户端自带 socket 管理，不读此默认值；真正兜底靠
+#   ① OpenAI client timeout + 每次 create 的 timeout=config.API_TIMEOUT
+#   ② 演示脚本 scripts/demo_path.sh 的 killpg 进程组强杀（60s/路径，已验证）
+socket.setdefaulttimeout(config.API_TIMEOUT)
 
 
 def _fmt_route_info(r: dict) -> str:
@@ -51,6 +59,7 @@ def main() -> None:
     client = OpenAI(
         api_key=os.getenv("OPENAI_API_KEY"),
         base_url=os.getenv("OPENAI_BASE_URL") or None,
+        timeout=config.API_TIMEOUT,
     )
     index = qa_core.load_index()
     embedder = qa_core.load_embedder()
