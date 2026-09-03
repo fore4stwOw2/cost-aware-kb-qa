@@ -49,11 +49,13 @@ def _fmt_route_info(r: dict) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="成本感知知识库问答 · 命令行")
-    parser.add_argument("questions", nargs="+", help="要问的问题，可多个")
+    parser.add_argument("questions", nargs="*", help="要问的问题，可多个")
     parser.add_argument("--mode", choices=["flash", "pro", "route"], default=None,
                         help="路由模式：flash/pro/route（默认读 config.ROUTE_MODE）")
     parser.add_argument("--threshold", type=float, default=None,
                         help="覆盖拒答阈值（默认为 config.SIM_THRESHOLD）")
+    parser.add_argument("--agent", default=None,
+                        help="Agent 任务：传入任务描述（如'帮我测算用 deepseek-v4-flash 做客服问答的月成本，DAU 1万'）")
     args = parser.parse_args()
 
     client = OpenAI(
@@ -61,6 +63,22 @@ def main() -> None:
         base_url=os.getenv("OPENAI_BASE_URL") or None,
         timeout=config.API_TIMEOUT,
     )
+
+    if args.agent:
+        import agent_core
+        print("=" * 72)
+        print("🤖 Agent 任务:", args.agent)
+        r = agent_core.run_agent(client, args.agent)
+        print(f"状态: {r['status']} | 轮数: {r['turns']} | 成本: ${r['total_cost']:.4f}")
+        for ev in r["trace"]:
+            if ev["type"] == "tool_call":
+                print(f"  🔧 t{ev['turn']} {ev['tool']} ok={ev['ok']} {ev['result_summary'][:80]}")
+            elif ev["type"] == "policy_check":
+                print(f"  🛡️ 策略: {ev['policy']} {ev.get('detail', '')[:80]}")
+        if r["answer"]:
+            print("A:", r["answer"])
+        return
+
     index = qa_core.load_index()
     embedder = qa_core.load_embedder()
 

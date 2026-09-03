@@ -42,6 +42,11 @@ ROUTE_MODE = os.getenv("ROUTE_MODE", "route")
 # 演示场景 30s 足够正常回答；评测跑长任务可用环境变量 API_TIMEOUT 覆盖调大
 API_TIMEOUT = float(os.getenv("API_TIMEOUT", "30"))
 
+# ---------- Agent（B1 二期） ----------
+AGENT_MODEL = os.getenv("AGENT_MODEL", "deepseek-v4-flash")   # 规划模型：用便宜档，成本可控
+AGENT_MAX_TURNS = int(os.getenv("AGENT_MAX_TURNS", "8"))      # 最大规划轮数
+AGENT_MAX_COST = float(os.getenv("AGENT_MAX_COST", "0.02"))   # 单任务费用上限（USD，PRD §6.3）
+
 # ---------- 单价表（每百万 token，美元） ----------
 # 核验来源：https://api-docs.deepseek.com/quick_start/pricing （2026-09-01 访问）
 # 取"高峰时段 + 缓存未命中"的较贵价估算（保守口径）；淡季为半价、缓存命中更便宜。
