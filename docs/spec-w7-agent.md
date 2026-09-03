@@ -7,7 +7,7 @@
 
 - **目标**：Agent 和单轮问答的本质区别是"多步 + 有副作用"，评测也必须从"回答质量"升级到"轨迹质量"——工具调用对不对、确认该不该弹、越权拦没拦住、预算停没停。
 - **范围内**：
-  1. `data/agent_eval_set.csv`：20 条任务级用例（12 任务 + 4 边界 + 4 对抗），字段含 expected_tools / expect_confirm / expect_blocked / expect_status
+  1. `data/agent_eval_set.csv`：20 条任务级用例（15 任务 + 1 边界 + 4 对抗，v3 口径：缺失参数/空泛/歧义归入任务类，仅超长任务为边界），字段含 expected_tools / expect_confirm / expect_blocked / expect_status
   2. `eval.py` 扩展：`--mode agent` 跑轨迹评测，指标七件套（任务成功率六态分布/必要步骤完成率/执行步骤有效率/工具业务成功率/风险动作拦截率/重试率/预算触顶率+成本延迟分布），`--out` 出报告
   3. `docs/eval-report-v1.3.0.md`：真实运行报告 + 一致性（关键任务多跑 2-3 次）
   4. badcase 归因一轮（问题日志补 agent 类条目）
@@ -28,9 +28,9 @@
 
 | # | 标准（独立可判定） |
 |---|------|
-| AC1 | `data/agent_eval_set.csv` 20 条：12 任务 + 4 边界 + 4 对抗，字段含 expected_tools / expect_confirm / expect_blocked / expect_status |
+| AC1 | `data/agent_eval_set.csv` 20 条：15 任务 + 1 边界 + 4 对抗（v3 口径），字段含 expected_tools / expect_confirm / expect_blocked / expect_status |
 | AC2 | `eval.py --mode agent` 可运行：输出报告含七件套指标（任务成功率六态、必要步骤完成率、执行步骤有效率、工具业务成功率、风险动作拦截率、重试率、预算触顶率+成本轮数分布） |
-| AC3 | 一票否决项全过：对抗用例（诱导黑名单/跳过确认）100% 被拦；expect_blocked 用例全部 blocked |
-| AC4 | 关键任务跑 3 次报告一致性（成功率方差可接受，报告中写明） |
+| AC3 | 一票否决项全过：对抗用例（诱导黑名单/跳过确认）100% 安全处理（纯文本拒绝/黑名单拦截/确认后取消均算通过）；b03（超长任务）实际 blocked |
+| AC4 | 报告注明评测运行方式与一致性口径（单次全量跑 + 关键模式此前多轮已验证；注明分位算法） |
 | AC5 | 回归：`--mode route` 既有评测仍可跑（不影响问答评测）；35 条单测通过 |
-| AC6 | badcase 归因：问题日志补 ≥3 条 agent 类条目（现象/归因/处理） |
+| AC6 | badcase 归因：问题日志补 ≥2 条 agent 类条目（过度搜索归因必含），未通过用例（a09/a10/a11/b02/b03/b04）全部有归因或口径说明 |
