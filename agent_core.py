@@ -159,7 +159,13 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
             if confirm_callback is None:
                 return {"status": "needs_confirmation", "answer": None, "card": card,
                         "trace": trace, "total_cost": round(total_cost, 4), "turns": turn}
-            approved = confirm_callback(card)
+            try:
+                approved = confirm_callback(card)
+            except Exception as e:  # 回调异常不允许穿透 run_agent（Reviewer 🟡-8）
+                trace.append({"type": "policy_check", "policy": "callback_error",
+                              "detail": f"确认回调异常: {e}"})
+                return {"status": "failed", "answer": None,
+                        "trace": trace, "total_cost": round(total_cost, 4), "turns": turn}
             if not approved:
                 trace.append({"type": "policy_check", "policy": "cancelled",
                               "detail": f"用户拒绝 {tool_name}，任务取消且不重放副作用"})

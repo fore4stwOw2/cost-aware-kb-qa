@@ -290,6 +290,65 @@ class TestTraceStructure(unittest.TestCase):
         policies = [ev.get("policy") for ev in r["trace"]]
         self.assertNotIn("waiting_approval", policies)
 
+    def test_medium_risk_no_confirmation(self):
+        """可逆写入（草稿）自动执行，不触发确认（AC6）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.draft", "args": {"title": "报告"}}',
+            '草稿已生成',
+        ]
+        called = []
+        r = agent_core.run_agent(self.FakeClient(seq), "生成草稿",
+                                 confirm_callback=lambda card: called.append(card) or True)
+        self.assertEqual(r["status"], "succeeded")
+        self.assertEqual(called, [], "medium 风险工具不应触发确认回调")
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertNotIn("waiting_approval", policies)
+
+    def test_budget_cost_blocked(self):
+        """费用触顶 → blocked（AC3：budget_cost 路径）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "price.lookup", "args": {"model": "gpt-5"}}',
+            'gpt-5 价格 $1.25/$10',
+        ]
+        r = agent_core.run_agent(self.FakeClient(seq), "任务", max_cost=0.000001)
+        self.assertEqual(r["status"], "blocked")
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertIn("budget_cost", policies)
+
+    def test_denied_after_prior_low_risk_no_replay(self):
+        """多轮场景：用户先批准 low 工具执行，后拒绝 high 工具 →
+        cancelled 且被拒工具无执行事件（AC4：不重放，覆盖多工具序列）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "price.lookup", "args": {"model": "gpt-5"}}',
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+        ]
+        decisions = []
+        def cb(card):
+            decisions.append(card["action"])
+            return card["action"] != "report.export"  # 拒绝 export
+        r = agent_core.run_agent(self.FakeClient(seq), "任务", confirm_callback=cb)
+        self.assertEqual(r["status"], "cancelled")
+        self.assertEqual(decisions, ["report.export"], "low 工具不应触发回调，只有 export 触发")
+        tool_evs = [ev for ev in r["trace"] if ev["type"] == "tool_call"]
+        self.assertEqual(len(tool_evs), 1, "只应有 price.lookup 执行；export 被拒未执行")
+        self.assertEqual(tool_evs[0]["tool"], "price.lookup")
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertIn("cancelled", policies)
+
+    def test_confirm_callback_exception_handled(self):
+        """回调抛异常不穿透 run_agent（Reviewer 🟡-8）。"""
+        import agent_core
+        seq = [
+            '{"action": "tool_call", "tool": "report.export", "args": {"draft_id": "d1", "channel": "email"}}',
+        ]
+        def bad_cb(card):
+            raise RuntimeError("回调崩溃")
+        r = agent_core.run_agent(self.FakeClient(seq), "任务", confirm_callback=bad_cb)
+        self.assertEqual(r["status"], "failed")
+
     def test_parse_json_robust(self):
         from agent_core import _parse_json
         self.assertIsNone(_parse_json("no json here"))
