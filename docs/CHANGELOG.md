@@ -4,6 +4,20 @@
 > W1-W4 为存量阶段（提交历史平铺于 main，补打 tag 作为锚点）；W5 起按分支规范执行。
 > 每条记录包含版本号 / 日期 / 阶段 / 关键结果 / 关联文档，与评测报告（`docs/eval-report-vX.Y.Z.md`）交叉核对。
 
+## v1.2.0 · Agent 二期 B2 确认闸门（2026-09-03）
+
+**一句话**：Agent 从"会执行"到"可负责地执行"——高风险动作必须人工确认，预算触顶即停，取消不重放副作用。
+
+**新增**：
+- agent_core 确认闸门：状态机（waiting_approval→approved/cancelled）+ 确认卡六要素 + confirm_callback + 回调异常兜底
+- report.export 改 dry-run 回执（EXPORT-SIM-），零真实副作用
+- app.py Agent 第 4 模式 + render_trace（工具轨迹/策略事件可视化）+ 确认卡两阶段交互
+- ask.py --auto-confirm + CLI 交互确认；单测 35 条（新增 11 条闸门用例）
+
+**关键结果**：Verifier 7/7 通过；确认卡逐字段断言；多轮"先 low 后 high"拒绝不重放验证；预算费用/轮数双触顶 blocked。
+
+**关联**：[spec-w6-agent](docs/spec-w6-agent.md) · [验收报告](docs/acceptance-b2.md)
+
 ## v1.1.0 · Agent 二期 B1 工具层（2026-09-03）
 
 **一句话**：作品二从"RAG 问答"迈出到"Agent 任务"第一步——工具注册与执行层 + 最小 planning→tool→observe 循环。
