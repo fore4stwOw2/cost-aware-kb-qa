@@ -4,6 +4,18 @@
 > W1-W4 为存量阶段（提交历史平铺于 main，补打 tag 作为锚点）；W5 起按分支规范执行。
 > 每条记录包含版本号 / 日期 / 阶段 / 关键结果 / 关联文档，与评测报告（`docs/eval-report-vX.Y.Z.md`）交叉核对。
 
+## v0.5.0 · W5 演示稳定化（2026-09-03）
+
+**一句话**：现场演示可复现、可兜底——固定演示路径一键跑通，API 异常时有离线存档兜底，并修复了一个真实的可靠性 bug（API 调用慢速挂起可卡 1000s+，无超时兜底）。
+
+**新增**：
+- `scripts/demo_path.sh`：五条固定演示路径（简单→便宜档 / 复杂→贵档 / 库外拒答 / 越权拦截 / 断模型降级）+ killpg 进程组强杀看门狗（60s/路径）
+- `docs/demo-archive/`：离线兜底说明 + 轨迹存档目录（真实轨迹：简单题路径带正确引用回答）
+- `docs/prompt-library.md`：提示词库独立成文（回答/分类器/拒答/降级/裁判 5 类，含 v1/v2/v4 版本史）
+- **可靠性修复**：API 调用三层超时防线（client timeout + create timeout + 脚本 killpg），`API_TIMEOUT` 默认 30s；实测修复前单条调用可挂 2 小时+
+
+**关联**：[spec-w5](docs/spec-w5.md) · [demo-archive](docs/demo-archive/README.md) · [prompt-library](docs/prompt-library.md) · [problem-log](docs/problem-log.md)（W5 条目）
+
 ## v0.4.0 · W4 badcase 修复终版（2026-09-02）
 
 **一句话**：修复评测暴露的 4 类问题，把路由能力推到可信水位。
