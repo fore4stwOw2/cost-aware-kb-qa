@@ -33,6 +33,8 @@ class Tool:
 
 def _validate(schema: dict, args: dict) -> str | None:
     """返回错误信息；None 表示通过。"""
+    if not isinstance(args, dict):  # 模型可能输出 "args": null/123/[...]，必须服务端拦截
+        return f"参数必须是对象（JSON object），收到 {type(args).__name__}"
     props = schema.get("properties", {})
     for req in schema.get("required", []):
         if req not in args:
@@ -48,11 +50,15 @@ def _validate(schema: dict, args: dict) -> str | None:
                 return f"参数 {key} 应为数字"
             if "minimum" in spec and val < spec["minimum"]:
                 return f"参数 {key} 小于下限 {spec['minimum']}"
+            if "maximum" in spec and val > spec["maximum"]:
+                return f"参数 {key} 大于上限 {spec['maximum']}"
         if spec.get("type") == "integer":
             if not isinstance(val, int) or isinstance(val, bool):
                 return f"参数 {key} 应为整数"
             if "minimum" in spec and val < spec["minimum"]:
                 return f"参数 {key} 小于下限 {spec['minimum']}"
+            if "maximum" in spec and val > spec["maximum"]:
+                return f"参数 {key} 大于上限 {spec['maximum']}"
         if "enum" in spec and val not in spec["enum"]:
             return f"参数 {key} 不在允许值内: {spec['enum']}"
     return None
@@ -170,8 +176,9 @@ def _cost_estimate(args: dict) -> dict | None:
 
 def _report_draft(args: dict) -> dict:
     """生成选型报告草稿（可逆，不对外）。B1 先返回结构化草稿骨架。"""
+    import uuid
     return {
-        "draft_id": f"draft-{abs(hash(args.get('title', ''))) % 100000}",
+        "draft_id": f"draft-{uuid.uuid4().hex[:8]}",
         "title": args.get("title", "模型选型报告"),
         "status": "draft",
         "note": "草稿已生成，可编辑/撤销；导出需人工确认（B2 实现）",

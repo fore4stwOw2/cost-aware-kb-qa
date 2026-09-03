@@ -75,6 +75,8 @@ def main() -> None:
                 print(f"  🔧 t{ev['turn']} {ev['tool']} ok={ev['ok']} {ev['result_summary'][:80]}")
             elif ev["type"] == "policy_check":
                 print(f"  🛡️ 策略: {ev['policy']} {ev.get('detail', '')[:80]}")
+            elif ev["type"] == "model_turn" and "error" in ev:
+                print(f"  ❌ 模型调用失败 t{ev['turn']}: {ev['error'][:150]}")
         if r["answer"]:
             print("A:", r["answer"])
         return

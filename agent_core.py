@@ -48,9 +48,9 @@ def _parse_json(text: str) -> dict | None:
 def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
               max_cost: float | None = None) -> dict:
     """执行一次 Agent 任务。返回 {status, answer, trace, total_cost, turns}。
-    status: succeeded / blocked（预算触顶）/ failed（解析或执行失败）"""
-    max_turns = max_turns or config.AGENT_MAX_TURNS
-    max_cost = max_cost or config.AGENT_MAX_COST
+    status: succeeded / blocked（预算触顶）/ needs_confirmation（需人工确认）/ failed"""
+    max_turns = config.AGENT_MAX_TURNS if max_turns is None else max_turns
+    max_cost = config.AGENT_MAX_COST if max_cost is None else max_cost
     registry = build_registry()
     task_id = uuid.uuid4().hex[:8]
     t0 = time.time()
@@ -75,18 +75,30 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
             return {"status": "blocked", "answer": None,
                     "trace": trace, "total_cost": round(total_cost, 4), "turns": turn - 1}
 
-        # ---- 模型规划 ----
-        try:
-            resp = client.chat.completions.create(
-                model=model, messages=messages, temperature=0,
-                timeout=config.API_TIMEOUT,
-            )
-            msg = resp.choices[0].message
-            content = msg.content or ""
-            reasoning_content = getattr(msg, "reasoning_content", None)
-            usage = {"p": resp.usage.prompt_tokens, "c": resp.usage.completion_tokens}
-        except Exception as e:
-            trace.append({"type": "model_turn", "turn": turn, "error": str(e)})
+        # ---- 模型规划（失败重试一次，避免偶发网络/解析抖动） ----
+        parsed = None
+        content = ""
+        reasoning_content = None
+        usage = {"p": 0, "c": 0}
+        last_err = None
+        for _attempt in range(2):
+            try:
+                resp = client.chat.completions.create(
+                    model=model, messages=messages, temperature=0,
+                    timeout=config.API_TIMEOUT,
+                )
+                msg = resp.choices[0].message
+                content = msg.content or ""
+                reasoning_content = getattr(msg, "reasoning_content", None)
+                usage = {"p": resp.usage.prompt_tokens, "c": resp.usage.completion_tokens}
+                parsed = _parse_json(content)
+                if parsed is not None:
+                    break
+                last_err = "输出非 JSON，重试"
+            except Exception as e:
+                last_err = str(e)
+        if parsed is None:
+            trace.append({"type": "model_turn", "turn": turn, "error": last_err or "两次均失败"})
             return {"status": "failed", "answer": None,
                     "trace": trace, "total_cost": round(total_cost, 4), "turns": turn - 1}
 
@@ -94,13 +106,6 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
         total_cost += turn_cost
         trace.append({"type": "model_turn", "turn": turn, "model": model,
                       "tokens": usage, "cost": round(turn_cost, 6)})
-
-        parsed = _parse_json(content)
-        if parsed is None:
-            trace.append({"type": "policy_check", "policy": "parse_fail",
-                          "detail": "模型输出非 JSON，停止循环避免错误累积"})
-            return {"status": "failed", "answer": None,
-                    "trace": trace, "total_cost": round(total_cost, 4), "turns": turn}
 
         # ---- 最终回答 ----
         if parsed.get("action") == "final":
@@ -118,7 +123,10 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
 
         tool_name = parsed.get("tool", "")
         args = parsed.get("args", {})
-        result = registry.call(tool_name, args)
+        try:
+            result = registry.call(tool_name, args)
+        except Exception as e:  # 工具执行异常不允许穿透 run_agent（Reviewer 🔴-2）
+            result = {"ok": False, "error": f"工具执行异常: {e}", "policy": "handler_error"}
         trace.append({
             "type": "tool_call", "turn": turn, "tool": tool_name,
             "args_summary": json.dumps(args, ensure_ascii=False)[:200],
@@ -126,6 +134,13 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
             "result_summary": json.dumps(result.get("data") or result.get("error"),
                                          ensure_ascii=False)[:300],
         })
+
+        # 需人工确认：B1 无确认闸门，停止循环避免空耗预算（Reviewer 🟡-5）
+        if result.get("policy") == "needs_confirmation":
+            trace.append({"type": "policy_check", "policy": "needs_confirmation",
+                          "detail": f"工具 {tool_name} 需人工确认（B2 实现），本次停止"})
+            return {"status": "needs_confirmation", "answer": None,
+                    "trace": trace, "total_cost": round(total_cost, 4), "turns": turn}
 
         # OpenAI 兼容协议：assistant 消息必须带 tool_calls，tool 消息回 tool_call_id
         tool_call_id = f"call_{task_id}_{turn}"
@@ -145,9 +160,7 @@ def run_agent(client: OpenAI, task: str, max_turns: int | None = None,
         messages.append({"role": "tool", "tool_call_id": tool_call_id,
                          "content": json.dumps(result, ensure_ascii=False)})
 
-        if not result["ok"] and result.get("policy") == "schema":
-            # 参数错误不盲目重试：回给模型修正
-            continue
+        # 参数/schema 错误：不盲目重试，回给模型修正（错误信息已在 tool 消息中）
 
     # 轮数触顶
     trace.append({"type": "policy_check", "policy": "budget_turns",

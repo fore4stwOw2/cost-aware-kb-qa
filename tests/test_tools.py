@@ -124,46 +124,84 @@ class TestReportTools(unittest.TestCase):
 
 
 class TestTraceStructure(unittest.TestCase):
-    """验证 agent_core 的 trace 事件链字段（用假 client 注入，不走网络）。"""
+    """用假 client 真正跑 run_agent，断言 trace 事件链（Reviewer 🔴-1：原测试是虚假覆盖）。"""
 
-    def test_trace_event_types(self):
+    class FakeMsg:
+        def __init__(self, content, reasoning_content=None):
+            self.content = content
+            self.reasoning_content = reasoning_content
+
+    class FakeResp:
+        def __init__(self, content, usage):
+            self.choices = [type("C", (), {"message": TestTraceStructure.FakeMsg(content)})()]
+            self.usage = type("U", (), {"prompt_tokens": usage[0], "completion_tokens": usage[1]})()
+
+    class FakeCompletions:
+        def __init__(self, owner):
+            self._owner = owner
+
+        def create(self, **kw):
+            seq = self._owner.seq
+            i = min(self._owner.idx, len(seq) - 1)
+            self._owner.idx += 1
+            return TestTraceStructure.FakeResp(seq[i], (10, 5))
+
+    class FakeChat:
+        def __init__(self, owner):
+            self._owner = owner
+            self.completions = TestTraceStructure.FakeCompletions(owner)
+
+    class FakeClient:
+        def __init__(self, seq):
+            self.seq = seq
+            self.idx = 0
+            self.chat = TestTraceStructure.FakeChat(self)
+
+    def test_agent_loop_trace_chain(self):
         import agent_core
 
-        class FakeResp:
-            def __init__(self, content):
-                self.choices = [type("C", (), {"message": type("M", (), {
-                    "content": content})()})()]
-                self.usage = type("U", (), {"prompt_tokens": 10, "completion_tokens": 5})()
-
-        class FakeClient:
-            def __init__(self, seq):
-                self.seq = seq
-                self.idx = 0
-            def chat(self):
-                return self
-            def completions(self):
-                return self
-            def create(self, **kw):
-                c = self.seq[min(self.idx, len(self.seq) - 1)]
-                self.idx += 1
-                return FakeResp(c)
-
-        # 序列：先工具调用（查询价格），再 final
+        # 序列：查价格 → 成本估算 → 最终回答
         seq = [
             '{"action": "tool_call", "tool": "price.lookup", "args": {"model": "gpt-5"}}',
-            '{"action": "final", "answer": "gpt-5 价格 $1.25/$10 [核验 2026-09-01]"}',
+            '{"action": "tool_call", "tool": "cost.estimate", "args": {"model": "gpt-5", "dau": 1000}}',
+            '{"action": "final", "answer": "gpt-5 月成本约 $9.75（核验 2026-09-01）"}',
         ]
-        import json
-        # 注入假 client（agent_core 直接调用 client.chat.completions.create）
-        fake = FakeClient(seq)
-        class _FakeChat:
-            def __init__(self, c): self._c = c
-            def completions(self): return self._c
-        fake.chat = lambda: _FakeChat(fake)
-        # run_agent 用 monkeypatch 的方式：直接调用内部逻辑验证 trace 字段
-        from agent_core import _parse_json
-        self.assertEqual(_parse_json(seq[0])["tool"], "price.lookup")
-        self.assertEqual(_parse_json(seq[1])["action"], "final")
+        r = agent_core.run_agent(self.FakeClient(seq), "测算 gpt-5 月成本 DAU 1000")
+        self.assertEqual(r["status"], "succeeded")
+        self.assertIn("9.75", r["answer"])
+
+        # trace 事件链必须包含：task → model_turn → tool_call ×2 → final_result
+        types = [ev["type"] for ev in r["trace"]]
+        self.assertEqual(types[0], "task")
+        self.assertIn("model_turn", types)
+        self.assertEqual(types.count("tool_call"), 2)
+        self.assertEqual(types[-1], "final_result")
+        # 工具调用事件必须带 policy 与结果摘要
+        tool_evs = [ev for ev in r["trace"] if ev["type"] == "tool_call"]
+        self.assertEqual(tool_evs[0]["tool"], "price.lookup")
+        self.assertEqual(tool_evs[0]["ok"], True)
+        self.assertEqual(tool_evs[0]["policy"], "allowed")
+
+    def test_budget_turns_blocked(self):
+        import agent_core
+        seq = ['{"action": "tool_call", "tool": "price.lookup", "args": {"model": "gpt-5"}}']
+        r = agent_core.run_agent(self.FakeClient(seq), "任务", max_turns=1)
+        self.assertEqual(r["status"], "blocked")
+        self.assertEqual(r["turns"], 1)
+        policies = [ev.get("policy") for ev in r["trace"]]
+        self.assertIn("budget_turns", policies)
+
+    def test_blacklist_in_trace(self):
+        import agent_core
+        # 模型尝试调黑名单工具 → trace 记录 blacklist 策略
+        seq = [
+            '{"action": "tool_call", "tool": "refund.create", "args": {"amount": 100}}',
+            '{"action": "final", "answer": "不应到达这里"}',
+        ]
+        r = agent_core.run_agent(self.FakeClient(seq), "尝试退款")
+        tool_evs = [ev for ev in r["trace"] if ev["type"] == "tool_call"]
+        self.assertEqual(tool_evs[0]["ok"], False)
+        self.assertEqual(tool_evs[0]["policy"], "blacklist")
 
     def test_parse_json_robust(self):
         from agent_core import _parse_json
